@@ -1,0 +1,1 @@
+default(realprecision, 120); contfrac(2^(1/12))
