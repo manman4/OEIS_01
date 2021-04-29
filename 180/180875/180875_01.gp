@@ -1,0 +1,1 @@
+N=20; x='x+O('x^N); f=sqrt(exp(x)/(2-exp(x))); Vec(serlaplace(deriv(f*intformal(f))))
