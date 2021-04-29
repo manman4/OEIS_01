@@ -18,6 +18,6 @@ def A180582(n):
     cycles = GraphSet.cycles(is_hamilton=True)
     return cycles.len()
 
-# print([A180582(n) for n in range(1, 30)])  # _Seiichi Manyama_, Nov 25 2020
+# print([A180582(n) for n in range(1, 30)])
 for n in range(1, 501):
     print(str(n) + " " + str(A180582(n)))
