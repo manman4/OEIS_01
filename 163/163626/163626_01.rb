@@ -19,4 +19,3 @@ ary = A163626(n)
   print ' '
   puts ary[i]
 }
-
