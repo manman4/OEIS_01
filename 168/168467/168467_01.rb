@@ -3,7 +3,6 @@ def f(n)
   (1..n).inject(:*)
 end
 
-
 def A168467(n)
   s = 1
   ary = [1]
