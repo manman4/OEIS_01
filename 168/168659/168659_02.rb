@@ -6,7 +6,7 @@ end
 def f(n)
   cnt = 0
   partition(n, 1, n).each{|ary|
-    cnt += 1 if ary.size % ary[0] == 0
+    cnt += 1 if ary[0] % ary.size == 0
   }
   cnt
 end
