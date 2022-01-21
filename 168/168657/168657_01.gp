@@ -1,0 +1,1 @@
+my(N=66, x='x+O('x^N)); Vec(sum(i=1, N, sum(j=1, sqrtint(N\i), x^(i*j^2)/prod(k=1, i*j-1, 1-x^k))))
