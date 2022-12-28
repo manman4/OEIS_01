@@ -1,4 +1,4 @@
-# m���ȉ������o��
+# m次以下を取り出す
 def mul(f_ary, b_ary, m)
   s1, s2 = f_ary.size, b_ary.size
   ary = Array.new(s1 + s2 - 1, 0)
@@ -8,12 +8,6 @@ def mul(f_ary, b_ary, m)
     }
   }
   ary[0..m]
-end
-
-def I(ary, n)
-  a = [1]
-  (0..n - 1).each{|i| a << -(0..i).inject(0){|s, j| s + ary[1 + i - j] * a[j]}}
-  a
 end
 
 def A(ary, n)
@@ -29,10 +23,11 @@ def A(ary, n)
   a_ary
 end
 
-n = 500
-a = (0..n).map{|i| i * i}
+n = 1010
+m = 1000
+a = (0..n).map{|i| i ** 2}
 ary = A(a, n)
-(1..n).each{|i|
+(1..m).each{|i|
   j = ary[i - 1]
   break if j.to_s.size > 1000
   print i
