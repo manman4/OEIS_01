@@ -15,3 +15,4 @@ ary = A116963(n)
   print ' '
   puts ary[i - 1]
 }
+
