@@ -3,8 +3,8 @@ def f(n)
   (1..n).inject(:*)
 end
 
-# a(0) = 1; a(n) = 2^(n-1) * (n-1)! * Sum_{i,j,k>=0 and i+j+k=n-1} (n-i)/2^i * a(i) * a(j) * a(k)/(i! * j! * k!)
-def a(n, k = 3)
+# a(0) = 1; a(n) = 2^(n-1) * (n-1)! * Sum_{i, j, k>=0 and i+j+k=n-1} (n-i)/2^i * a(i) * a(j) * a(k)/(i! * j! * k!). 
+def a(n, k)
   ary = [1]
   (1..n).each{|m|
     s = 0
