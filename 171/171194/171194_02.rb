@@ -12,7 +12,7 @@ def a(n, k)
   ary
 end
 
-n = 80
+n = 50
 ary = a(n, 5)
 (0..n).each{|i|
   j = ary[i]
