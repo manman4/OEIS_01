@@ -3,7 +3,7 @@ def a(n, k)
   ary = [1]
   (1..n).each{|m|
     s = 0
-    # i,j,k>=0 and i+j+k=m-1を列挙
+    # x_1, x_2, ..., x_6>=0 and x_1+x_2+...+x_6=m-1を列挙
     (0..m - 1).to_a.repeated_permutation(k).each{|i|
       s += 1r / (2 ** i[0]) * (1..k).inject(1){|prod, j| prod * ary[i[j - 1]]} if i.sum == m - 1
     }
@@ -12,8 +12,8 @@ def a(n, k)
   ary
 end
 
-n = 50
-ary = a(n, 5)
+n = 13
+p ary = a(n, 6)
 (0..n).each{|i|
   j = ary[i]
   break if j.to_s.size > 1000
