@@ -1,50 +1,66 @@
-# OEIS_01
+# OEIS\_01
 
-- [日本語](README_ja.md)
-- [English](README.md)
+* [日本語版](README_ja.md)
+* [English Version](README.md)
 
 ## Overview
 
-I ([manman4](https://github.com/manman4)) started editing OEIS in 2016.
+I am **manman4** ([GitHub profile](https://github.com/manman4)) and have been actively contributing to the OEIS (Online Encyclopedia of Integer Sequences) since 2016.
 
-As I have accumulated various pieces of code during the editing process, I plan to release them gradually.
+Over the years, I have developed and collected a variety of code snippets and tools related to OEIS sequence editing and analysis. This repository serves as a platform to gradually release and share these resources with the community.
 
-Please note that there may be some garbled text.
+> **Note:** Some files or texts may contain garbled characters due to encoding or formatting issues.
 
-|  Sequence Number  |  Relevant Repository  |
-| ---- | ---- |
-|  A000001-A099999  |  [OEIS_00](https://github.com/manman4/OEIS_00)  |
-|  A100000-A199999  |  [OEIS_01](https://github.com/manman4/OEIS_01)  |
-|  A200000-A299999  |  [OEIS_02](https://github.com/manman4/OEIS_02)  |
-|  A300000-A399999  |  [OEIS_03](https://github.com/manman4/OEIS_03)  |
+### Repository Organization by Sequence Ranges
 
-## b-file
+| Sequence Number Range | Corresponding Repository                       |
+| --------------------- | ---------------------------------------------- |
+| A000001–A099999       | [OEIS\_00](https://github.com/manman4/OEIS_00) |
+| A100000–A199999       | [OEIS\_01](https://github.com/manman4/OEIS_01) |
+| A200000–A299999       | [OEIS\_02](https://github.com/manman4/OEIS_02) |
+| A300000–A399999       | [OEIS\_03](https://github.com/manman4/OEIS_03) |
 
-To avoid uploading b-files (due to their large size, which will be managed in a separate repository), text files will also not be uploaded.
+---
 
-The files are limited to 1000 digits, including the sign.
+## About b-files
 
-```PARI:
+Due to the typically large size of b-files, they will **not** be uploaded here. Instead, they are managed in a separate dedicated repository.
+
+* Text files related to sequences are also excluded to avoid bulk uploads.
+* All files are limited to **1000 digits** (including the sign) to keep the data manageable.
+
+### Example PARI/GP script for generating b-file data (A336975):
+
+```pari
 \\ A336975
-v(n)={x='x+O('x^(n+10)); 1/prod(k=1, n, 1-x^k*(k+x))};
-M=1000;
-v=v(M);
-for(n=0, M, i=polcoef(v, n); if((i<0)+#digits(i)>1000, break); write("/Users/xxx/Desktop/b336975_gp_test.txt", n, " ", i))
+v(n) = { x = 'x + O('x^(n + 10)); 1 / prod(k = 1, n, 1 - x^k * (k + x)) };
+M = 1000;
+v = v(M);
+for (n = 0, M,
+    i = polcoef(v, n);
+    if ((i < 0) + #digits(i) > 1000, break);
+    write("/Users/xxx/Desktop/b336975_gp_test.txt", n, " ", i)
+)
 ```
 
-As a precaution, the calculations are carried out for a higher range than needed.
-For example, calculate up to 10100 but display only up to 10000.
+* **Note:** The computation is performed for a slightly larger range than required (e.g., calculating up to 10,100 terms but only outputting up to 10,000) to ensure accuracy.
 
-## .gp files
+---
 
-In this repository, the scripts are saved as PARI/GP files.
+## File Format
+
+* All scripts in this repository are saved as **PARI/GP** (`.gp`) files for easy reuse and modification.
+
+---
 
 ## Reference Materials
 
-The official repository for OEIS data can be found here:
+* Official OEIS data repository:
+  [https://github.com/oeis/oeisdata/](https://github.com/oeis/oeisdata/)
 
-https://github.com/oeis/oeisdata/
+* My curated OEIS-related study repositories (organized by themes):
+  [https://github.com/manman4/study\_OEIS](https://github.com/manman4/study_OEIS)
 
-Repositories organized by theme, created by me, can be found here:
+---
 
-https://github.com/manman4/study_OEIS
+If you need any assistance or have questions about these tools and files, feel free to reach out!
