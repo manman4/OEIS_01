@@ -3,7 +3,7 @@ def ncr(n, r)
   (n - r + 1..n).inject(:*) / (1..r).inject(:*)
 end
 
-# a(n, k) = Sum_{j=k..n/2} (-1)^(j-k)*(j+1)*binomial(j,k)*binomial(2*n-3*j+1,n-2*j)/(2*n-3*j+1).
+# T(n,k) = Sum_{j=k..floor(n/2)} (-1)^(j-k) * (j+1) * binomial(j,k) * binomial(2*n-3*j+1,n-2*j)/(2*n-3*j+1).
 def a(n, k)
   (k..n / 2).inject(0){|s, j| s + (-1)**(j - k) * (j + 1) * ncr(j, k) * ncr(2 * n - 3 * j + 1, n - 2 * j) / (2 * n - 3 * j + 1)}.to_i
 end
