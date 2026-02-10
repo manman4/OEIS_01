@@ -3,28 +3,28 @@ def ncr(n, r)
   (n - r + 1..n).inject(:*) / (1..r).inject(:*)
 end
 
+# For n>0,
+# a(2*n)   =  (1/n) * Sum_{k=0..n-1} (-2)^k * binomial(2*n+k-1,k) * binomial(2*n-k-2,n-k-1),
+# a(2*n+1) = -(2/n) * Sum_{k=0..n-1} (-2)^k * binomial(2*n+k+1,k) * binomial(2*n-k-2,n-k-1).
+
 # a(2n)
 def a_even(n)
   raise ArgumentError, "n must be > 0" if n <= 0
-  s = 0
-  (0..n-1).each{|k|
-    s += (-2)**k *
+  (0..n-1).inject(0){|s, k|
+    s + (-2)**k *
          ncr(2*n + k - 1, k) *
          ncr(2*n - k - 2, n - k - 1)
-  }
-  s / n
+  } / n
 end
 
 # a(2n+1)
 def a_odd(n)
   raise ArgumentError, "n must be > 0" if n <= 0
-  s = 0
-  (0..n-1).each{|k|
-    s += (-2)**k *
+  (0..n-1).inject(0){|s, k|
+    s + (-2)**k *
          ncr(2*n + k + 1, k) *
          ncr(2*n - k - 2, n - k - 1)
-  }
-  -2 * s / n
+  } * (-2) / n
 end
 
 # a(m)（偶奇で自動分岐）
@@ -34,6 +34,7 @@ def a(m)
 end
 
 n = 31
+p (1..n).map{|i| a(i)}
 (1..n).each{|i|
   j = a(i)
   break if j.to_s.size > 1000
