@@ -1,5 +1,4 @@
-# 二項係数 C(n,k)
-def binom(n, r)
+def ncr(n, r)
   return 1 if r == 0
   (n - r + 1..n).inject(:*) / (1..r).inject(:*)
 end
@@ -8,10 +7,10 @@ end
 def a_even(n)
   raise ArgumentError, "n must be > 0" if n <= 0
   s = 0
-  (0..n-1).each { |k|
+  (0..n-1).each{|k|
     s += (-2)**k *
-         binom(2*n + k - 1, k) *
-         binom(2*n - k - 2, n - k - 1)
+         ncr(2*n + k - 1, k) *
+         ncr(2*n - k - 2, n - k - 1)
   }
   s / n
 end
@@ -20,10 +19,10 @@ end
 def a_odd(n)
   raise ArgumentError, "n must be > 0" if n <= 0
   s = 0
-  (0..n-1).each { |k|
+  (0..n-1).each{|k|
     s += (-2)**k *
-         binom(2*n + k + 1, k) *
-         binom(2*n - k - 2, n - k - 1)
+         ncr(2*n + k + 1, k) *
+         ncr(2*n - k - 2, n - k - 1)
   }
   -2 * s / n
 end
