@@ -1,10 +1,7 @@
 # 二項係数 C(n,k)
-def binom(n, k)
-  return 0 if k < 0 || k > n
-  k = [k, n - k].min
-  r = 1
-  (1..k).each { |i| r = r * (n - k + i) / i }
-  r
+def binom(n, r)
+  return 1 if r == 0
+  (n - r + 1..n).inject(:*) / (1..r).inject(:*)
 end
 
 # a(2n)
@@ -37,7 +34,7 @@ def a(m)
   m.even? ? a_even(m / 2) : a_odd((m - 1) / 2)
 end
 
-n = 1000
+n = 31
 (1..n).each{|i|
   j = a(i)
   break if j.to_s.size > 1000
