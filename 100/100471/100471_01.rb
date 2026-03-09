@@ -34,10 +34,7 @@ class A100471Fast
       max_f = n / d
       f = min_f
       while f <= max_f
-        rest = n - (d * f)
-        # 次状態の最小必要値より小さくなったら以降の f は不可能
-        break if rest > 0 && rest < (f + 1)
-        count += solve(rest, d, f)
+        count += solve(n - (d * f), d, f)
         f += 1
       end
       d += 1
