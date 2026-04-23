@@ -13,8 +13,6 @@ for(n=0,M,for(k=0,n,my(s=0,j0=if(k>0,k,0));for(j=j0,n,s+=(-1)^(n-j)*BIN[n+1,j+1]
 EVEN=vector(M+1,i,0);
 for(m=0,M,if(m%2==0,EVEN[m+1]=D[m+1,m/2+3]));
 
-E(n,k)=if(n<0||k<0||k>n,0,EU[n+1,k+1]);
-a271697(n,k)=if(n<0||k<0||k>n,0,D[n+1,k+1]);
 a(n)={my(s=0);for(m=0,n,if(m%2==0,s+=BIN[n+1,m+1]*EVEN[m+1]));s;};
 
 cnt=1;
