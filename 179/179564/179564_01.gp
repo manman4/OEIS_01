@@ -13,8 +13,6 @@ for(n=0,M,for(k=0,n,my(s=0,j0=if(k>0,k,0));for(j=j0,n,s+=(-1)^(n-j)*BIN[n+1,j+1]
 ODD=vector(M+1,i,0);
 for(m=1,M,if(m%2,ODD[m+1]=D[m+1,(m+3)/2+1]));
 
-E(n,k)=if(n<0||k<0||k>n,0,EU[n+1,k+1]);
-a271697(n,k)=if(n<0||k<0||k>n,0,D[n+1,k+1]);
 a(n)={my(s=0);for(m=1,n,if(m%2,s+=BIN[n+1,m+1]*ODD[m+1]));s;};
 
 cnt=1;
