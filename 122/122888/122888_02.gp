@@ -43,4 +43,4 @@ write_triangle_data(N, filename) =
 
 \\ example
 N = 10;
-write_triangle_data(N, "b122888_2.txt");
+write_triangle_data(N, "b122888.txt");
