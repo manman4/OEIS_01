@@ -5,5 +5,9 @@ b(n, k, m=2) = {
   TK[1, ][n+1];
 };
 a(n, k) = b(k-1, n);
+for(k=1, 10, print1(a(1, k),", "));
 for(k=1, 10, print1(a(2, k),", "));
 for(k=1, 10, print1(a(3, k),", "));
+
+matrix(7, 7, n, k, a(n, k))
+
