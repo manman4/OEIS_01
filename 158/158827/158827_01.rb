@@ -3,7 +3,7 @@ def ncr(n, r)
   (n - r + 1..n).inject(:*) / (1..r).inject(:*)
 end
 
-# a(n) = Sum_{0 = x_0 <= x_1 <= ... <= x_4 = n-1} Product_{k=0..3} (x_k + 1) * binomial(2*x_{k+1} - x_k + 1,x_{k+1} - x_k)/(2*x_{k+1} - x_k + 1).
+# a(n) = Sum_{0 = x_0 <= x_1 <= x_2 <= x_3 <= x_4 = n-1} Product_{k=0..3} (x_k + 1) * binomial(2*x_{k+1} - x_k + 1,x_{k+1} - x_k)/(2*x_{k+1} - x_k + 1).
 # x_0 =0, x_4 = n-1に注意
 def a(n)
   sum = 0
