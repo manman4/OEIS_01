@@ -40,3 +40,7 @@ T1(n,k) = {
 };
 
 for(n=0, 19, print1(T1(n, 2)-Egen(n, 2),", "));
+
+
+\\ E.g.f.: (1/x) * Series_Reversion( H_2(x) ), where H_k(x) is the k-th iterate of x*exp(-x). 
+my(N=20, x='x+O('x^N)); Vec(serlaplace( serreverse(subst(x*exp(-x), 'x, subst(x*exp(-x), 'x, x)))/x ))
