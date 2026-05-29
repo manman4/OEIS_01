@@ -10,8 +10,8 @@ Egen(n,k) = {
 
   n! * polcoef(F_iter/x, n)
 };
-matrix(6, 6, n, k, Egen(n-1, k-1))
-for(n=0, 9, for(k=0, n, print1(Egen(k, n-k),", ")));
+
+for(n=0, 19, print1(Egen(n, 2),", "));
 
 \\ E.g.f. of column k: (1/x) * Series_Reversion( H_k(x) ), where H_k(x) is the k-th iterate of x*exp(-x).
 Tgen(n,k) = {
@@ -24,8 +24,8 @@ Tgen(n,k) = {
 
   n! * polcoef(serreverse(Finv_k)/x, n)
 };
-matrix(6, 6, n, k, Tgen(n-1, k-1))
-for(n=0, 9, for(k=0, n, print1(Tgen(k, n-k)-Egen(k, n-k),", ")));
+
+for(n=0, 19, print1(Tgen(n, 2)-Egen(n, 2),", "));
 
 
 \\ E.g.f. of column k: -W_k(-x)/x, where W_k(x) is the k-th iterate of LambertW(x).
@@ -38,5 +38,5 @@ T1(n,k) = {
 
   n! * polcoef(-subst(Finv_k, 'x, -x)/x, n)
 };
-matrix(6, 6, n, k, T1(n-1, k-1))
-for(n=0, 9, for(k=0, n, print1(T1(k, n-k)-Egen(k, n-k),", ")));
+
+for(n=0, 19, print1(T1(n, 2)-Egen(n, 2),", "));
