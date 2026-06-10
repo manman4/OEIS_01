@@ -12,8 +12,11 @@ Aseries(l, N) =
 {
   my(A = 'x + O('x^(N + 1)));
   for (t = 1, N, A = 'x * exp(iter(A, l, N)));
+  print("A = ", A);
+  print(Vec(serlaplace(A)));
   exp(A)
 };
 
-v = Aseries(2, 145);
-for(n=0, 136, write("b144681_1.txt", n, " ", n!*polcoef(v, n)));
+v = Aseries(2, 25);
+Vec(serlaplace(v))
+\\ for(n=0, 136, write("b144681_1.txt", n, " ", n!*polcoef(v, n)));
