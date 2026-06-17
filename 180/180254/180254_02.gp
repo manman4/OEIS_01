@@ -1,3 +1,4 @@
+\\ E.g.f. A(x) satisfies A'(x) = 1/(1 - A(x)*A'(x))^k, with A(0)=0.
 A_ser(k, N)=
 {
   my(x = 'x + O('x^(N+1)));
@@ -13,8 +14,10 @@ Vec(serlaplace(A_ser(2, 10)))
 Vec(serlaplace(A_ser(3, 10)))
 Vec(serlaplace(A_ser(4, 10)))
 
+print("Now using series reversion...");
 
-
+\\ Let R(x) = Series_Reversion( (1 - (1-2*(k+1)*x) * (1-x)^(2*k))/(2*(2*k+1)) ).
+\\ A(x) = R(x) * (1-R(x))^k.
 Aser(k, N)=
 {
   my(z = 'x + O('x^N));
