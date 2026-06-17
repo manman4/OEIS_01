@@ -1,0 +1,30 @@
+A_ser(k, N)=
+{
+  my(x = 'x + O('x^(N+1)));
+  my(A = x + O('x^(N+1)));
+  for(i=1, N,
+    A = intformal(1/(1 - A*deriv(A))^k) + O('x^(N+1))
+  );
+  A
+};
+
+Vec(serlaplace(A_ser(1, 10)))
+Vec(serlaplace(A_ser(2, 10)))
+Vec(serlaplace(A_ser(3, 10)))
+Vec(serlaplace(A_ser(4, 10)))
+
+
+
+Aser(k, N)=
+{
+  my(z = 'x + O('x^N));
+  my(R = serreverse((1 - (1 - 2*(k+1)*z)*(1-z)^(2*k)) / (2*(2*k+1))));
+  R * (1-R)^k;
+};
+
+Vec(serlaplace(Aser(1, 20)))
+Vec(serlaplace(Aser(2, 20)))
+Vec(serlaplace(Aser(3, 20)))
+Vec(serlaplace(Aser(4, 20)))
+
+    
