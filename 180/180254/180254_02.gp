@@ -9,6 +9,7 @@ A_ser(k, N)=
   A
 };
 
+Vec(serlaplace(A_ser(0, 10)))
 Vec(serlaplace(A_ser(1, 10)))
 Vec(serlaplace(A_ser(2, 10)))
 Vec(serlaplace(A_ser(3, 10)))
@@ -25,6 +26,7 @@ Aser(k, N)=
   R * (1-R)^k;
 };
 
+Vec(serlaplace(Aser(0, 20)))
 Vec(serlaplace(Aser(1, 20)))
 Vec(serlaplace(Aser(2, 20)))
 Vec(serlaplace(Aser(3, 20)))
