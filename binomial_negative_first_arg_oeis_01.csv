@@ -1,0 +1,2 @@
+filename,filepath,pattern,affected_range,reason,self_check,resolved_date
+115344_01.gp,115/115344/115344_01.gp,"binomial(2*n-3*k, n-k-1)",n=1のみ,k=nで両引数が負整数となり、第2引数<=第1引数がn=1でのみ成立,"k=n -> (-n, -1); verified for n=1のみ",2026-06-25
