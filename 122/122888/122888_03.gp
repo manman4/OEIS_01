@@ -37,15 +37,16 @@ triangle(N) =
   v;
 }
 
-write_triangle_data(N, filename) =
+write_triangle_data(N) =
 {
-  my(v = triangle(N));
-  system(Str("rm -f ", filename));
+  my(v = triangle(N), fh);
+  fh = fileopen("b122888.txt", "w");
   for(i = 1, #v,
-    write(filename, Str(i - 1, " ", v[i]))
+    filewrite(fh, Str(i - 1, " ", v[i]))
   );
+  fileclose(fh);
 }
 
 \\ example
 N = 10;
-write_triangle_data(N, "b122888.txt");
+write_triangle_data(N);
