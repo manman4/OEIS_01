@@ -34,8 +34,7 @@ str = <<~EOS
 32 1064650562078244
 EOS
 
-p ary = str.split("\n").map{|line| line.split(' ')[1].to_i}
-
+ary = str.split("\n").map{|line| line.split(' ')[1].to_i}
 s = 0
 b=[]
 (0...ary.size).each{|i|
