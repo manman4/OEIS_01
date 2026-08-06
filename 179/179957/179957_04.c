@@ -30,6 +30,17 @@
  * factor 2 is applied exactly once.  Components still open at the end are
  * finalized in the same way.
  *
+ * The standalone executable parallelizes only the coefficient accumulation;
+ * the frontier states and transitions are still constructed by this same
+ * DP.  At each layer, transitions are staged and grouped by destination.
+ * Worker threads then own disjoint destination-state ranges, so every GMP
+ * output coefficient has one writer while all source coefficients are
+ * read-only.  The two rolling maps also retain their initialized GMP arrays
+ * and clear them between layers instead of destroying and reallocating them.
+ * --threads T selects 1..64 workers; the default uses the online CPU count
+ * (capped at 16, and one worker for small layers).  Code that embeds 04 may
+ * define A179957_04_NO_THREADS to retain the original source-row loop.
+ *
  * For every fixed k, this uses S(k) frontier states and computes all terms
  * through N in O(S(k)*k^2*N^2) exact-arithmetic operations and
  * O(S(k)*N) GMP coefficients.  S(k) grows quickly: this is intended for
@@ -38,8 +49,8 @@
  * 2<=n<2k, and a_k(2k)=2 are returned without constructing frontier
  * states.  (For n<2k the allowed-adjacency graph has an isolated vertex;
  * for n=2k its chain graph has one Hamilton path up to reversal.)
- * Structural guards stop before 100000 simultaneous states or 2000000 GMP
- * frontier coefficient objects per layer; hitting a guard reports an error,
+ * Structural guards stop before 100000 simultaneous states or 10000000 GMP
+ * frontier coefficient objects per map; hitting a guard reports an error,
  * never a partial value as a completed answer.
  *
  * All coefficients, factorials, and answers use GMP.  State hashes are
@@ -63,7 +74,7 @@
  *
  * Build (Homebrew GMP on macOS):
  *
- *   clang -O3 -std=c11 -Wall -Wextra -Wpedantic \
+ *   clang -O3 -std=c11 -Wall -Wextra -Wpedantic -pthread \
  *     -I/opt/homebrew/include -L/opt/homebrew/lib \
  *     179957_04.c -lgmp -o 179957_04
  *
@@ -72,9 +83,13 @@
  *   ./179957_04 --k 4
  *   ./179957_04 --k 3 --upto 100
  *   ./179957_04 --k 5 --term 100
+ *   ./179957_04 --k 7 --upto 500 --threads 8
  *   ./179957_04 --k 4 --check
  */
 
+#if defined(__APPLE__) && !defined(A179957_04_NO_THREADS)
+#define _DARWIN_C_SOURCE
+#endif
 #define _POSIX_C_SOURCE 200809L
 
 #include <errno.h>
@@ -86,6 +101,10 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+
+#ifndef A179957_04_NO_THREADS
+#include <pthread.h>
+#endif
 
 /* GMP needs FILE to be declared before gmp.h for gmp_fprintf. */
 #include <gmp.h>
@@ -105,7 +124,14 @@
     (1 + MAX_FRONTIER_WIDTH + \
      MAX_FRONTIER_WIDTH * (MAX_FRONTIER_WIDTH - 1) / 2)
 #define MAX_ACTIVE_STATES 100000U
-#define MAX_FRONTIER_COEFFICIENT_SLOTS 2000000U
+#define MAX_FRONTIER_COEFFICIENT_SLOTS 10000000U
+
+#ifndef A179957_04_NO_THREADS
+#define M4_MAX_LAYER_TRANSITIONS 5000000U
+#define M4_MAX_THREADS 64
+#define M4_AUTO_THREAD_CAP 16
+#define M4_PARALLEL_STATE_THRESHOLD 1024U
+#endif
 
 #define KNOWN_MAX_N 21
 #define DEFAULT_CHECK_N 21
@@ -148,6 +174,7 @@ typedef struct {
 typedef struct {
     PolynomialState *item;
     size_t count;
+    size_t allocated_count;    /* coefficient arrays retained across resets */
     size_t capacity;
     size_t *bucket;             /* zero means empty; otherwise index+1 */
     size_t bucket_count;        /* always a power of two */
@@ -159,8 +186,14 @@ typedef struct {
     size_t peak_frontier_coefficient_slots;
     uint64_t state_transition_applications;
     uint64_t polynomial_addmuls;
+    size_t worker_threads;
     double seconds;
 } DpStats;
+
+#ifndef A179957_04_NO_THREADS
+/* Zero means automatic selection from the online processor count. */
+static int m4_requested_threads = 0;
+#endif
 
 static _Noreturn void die(const char *message)
 {
@@ -520,6 +553,7 @@ static void polynomial_map_init(PolynomialMap *map,
 {
     map->item = NULL;
     map->count = 0U;
+    map->allocated_count = 0U;
     map->capacity = 0U;
     map->bucket = NULL;
     map->bucket_count = 0U;
@@ -528,13 +562,29 @@ static void polynomial_map_init(PolynomialMap *map,
 
 static void polynomial_map_destroy(PolynomialMap *map)
 {
-    for (size_t index = 0U; index < map->count; ++index) {
+    for (size_t index = 0U; index < map->allocated_count; ++index) {
         mpz_array_destroy(map->item[index].coefficient,
                           map->coefficient_count);
     }
     free(map->item);
     free(map->bucket);
     polynomial_map_init(map, map->coefficient_count);
+}
+
+static void polynomial_map_reset(PolynomialMap *map)
+{
+    for (size_t index = 0U; index < map->count; ++index) {
+        for (size_t coefficient = 0U;
+             coefficient < map->coefficient_count; ++coefficient) {
+            mpz_set_ui(map->item[index].coefficient[coefficient], 0UL);
+        }
+    }
+    map->count = 0U;
+    if (map->bucket_count != 0U) {
+        memset(map->bucket, 0,
+               checked_product_size(map->bucket_count,
+                                    sizeof(*map->bucket)));
+    }
 }
 
 static void polynomial_map_rehash(PolynomialMap *map,
@@ -611,8 +661,13 @@ static PolynomialState *polynomial_map_get(PolynomialMap *map,
     }
     size_t index = map->count++;
     map->item[index].key = key;
-    map->item[index].coefficient =
-        mpz_array_create(map->coefficient_count);
+    if (index == map->allocated_count) {
+        map->item[index].coefficient =
+            mpz_array_create(map->coefficient_count);
+        map->allocated_count = checked_add_size(map->allocated_count, 1U);
+    } else if (index > map->allocated_count) {
+        die("frontier coefficient-array pool is corrupt");
+    }
     map->bucket[slot] = index + 1U;
     return &map->item[index];
 }
@@ -664,10 +719,304 @@ static void write_complete_term(FILE *stream, int n, const mpz_t value)
     }
 }
 
+#ifndef A179957_04_NO_THREADS
+typedef struct {
+    size_t source;
+    size_t destination;
+    uint8_t edges;
+    unsigned long weight;
+} M4StagedTransition;
+
+typedef struct {
+    size_t source;
+    uint8_t edges;
+    unsigned long weight;
+} M4IncomingTransition;
+
+typedef struct {
+    M4IncomingTransition *incoming;
+    size_t *offset; /* destination d uses [offset[d], offset[d+1]). */
+    size_t transition_count;
+} M4LayerPlan;
+
+typedef struct {
+    const PolynomialMap *current;
+    PolynomialMap *next;
+    const M4LayerPlan *plan;
+    int n;
+    int maximum_edges;
+    size_t first_destination;
+    size_t past_last_destination;
+    uint64_t addmuls;
+    bool invariant_error;
+} M4WorkerTask;
+
+static size_t m4_select_worker_threads(size_t state_count)
+{
+    size_t threads;
+    if (m4_requested_threads > 0) {
+        threads = (size_t)m4_requested_threads;
+    } else if (state_count < M4_PARALLEL_STATE_THRESHOLD) {
+        threads = 1U;
+    } else {
+        long online = sysconf(_SC_NPROCESSORS_ONLN);
+        threads = online > 0 ? (size_t)online : 1U;
+        if (threads > M4_AUTO_THREAD_CAP) {
+            threads = M4_AUTO_THREAD_CAP;
+        }
+    }
+    if (threads > state_count) {
+        threads = state_count;
+    }
+    return threads == 0U ? 1U : threads;
+}
+
+static void m4_layer_plan_destroy(M4LayerPlan *plan)
+{
+    free(plan->incoming);
+    free(plan->offset);
+    memset(plan, 0, sizeof(*plan));
+}
+
+static void m4_stage_layer(const PolynomialMap *current,
+                           PolynomialMap *next, int frontier_size,
+                           int frontier_width, M4LayerPlan *plan,
+                           DpStats *stats)
+{
+    memset(plan, 0, sizeof(*plan));
+    M4StagedTransition *staged = NULL;
+    size_t staged_capacity = 0U;
+    for (size_t source_index = 0U; source_index < current->count;
+         ++source_index) {
+        const PolynomialState *source = &current->item[source_index];
+        Transition transition[MAX_RAW_TRANSITIONS];
+        size_t transition_count = build_transitions(
+            source->key, frontier_size, frontier_width, transition);
+        for (size_t t = 0U; t < transition_count; ++t) {
+            PolynomialState *destination = polynomial_map_get(
+                next, transition[t].key);
+            size_t destination_index =
+                (size_t)(destination - next->item);
+            if (destination_index >= next->count) {
+                free(staged);
+                die("staged frontier destination is out of range");
+            }
+            if (plan->transition_count >= M4_MAX_LAYER_TRANSITIONS) {
+                free(staged);
+                die("frontier layer transition limit reached");
+            }
+            if (plan->transition_count == staged_capacity) {
+                size_t new_capacity = staged_capacity == 0U
+                                          ? 1024U
+                                          : staged_capacity * 2U;
+                if (new_capacity < staged_capacity ||
+                    new_capacity > M4_MAX_LAYER_TRANSITIONS) {
+                    new_capacity = M4_MAX_LAYER_TRANSITIONS;
+                }
+                if (new_capacity <= staged_capacity) {
+                    free(staged);
+                    die("frontier layer transition capacity overflow");
+                }
+                staged = xreallocarray(staged, new_capacity,
+                                       sizeof(*staged));
+                if (staged == NULL) {
+                    die("frontier layer transition allocation failed");
+                }
+                staged_capacity = new_capacity;
+            }
+            if (staged == NULL ||
+                plan->transition_count >= staged_capacity) {
+                die("frontier layer transition buffer invariant failed");
+            }
+            M4StagedTransition *record =
+                &staged[plan->transition_count++];
+            record->source = source_index;
+            record->destination = destination_index;
+            record->edges = transition[t].edges;
+            record->weight = transition[t].weight;
+            increment_u64(&stats->state_transition_applications,
+                          "state transition");
+        }
+    }
+
+    if (plan->transition_count != 0U && staged == NULL) {
+        die("frontier layer transition staging is missing");
+    }
+    plan->offset = xcalloc(next->count + 1U, sizeof(*plan->offset));
+    for (size_t t = 0U; t < plan->transition_count; ++t) {
+        size_t destination = staged[t].destination;
+        plan->offset[destination + 1U] = checked_add_size(
+            plan->offset[destination + 1U], 1U);
+    }
+    for (size_t destination = 0U; destination < next->count;
+         ++destination) {
+        plan->offset[destination + 1U] = checked_add_size(
+            plan->offset[destination + 1U], plan->offset[destination]);
+    }
+    if (plan->offset[next->count] != plan->transition_count) {
+        free(staged);
+        m4_layer_plan_destroy(plan);
+        die("frontier layer prefix-sum mismatch");
+    }
+
+    plan->incoming = xcalloc(plan->transition_count,
+                             sizeof(*plan->incoming));
+    size_t *position = xcalloc(next->count, sizeof(*position));
+    for (size_t destination = 0U; destination < next->count;
+         ++destination) {
+        position[destination] = plan->offset[destination];
+    }
+    for (size_t t = 0U; t < plan->transition_count; ++t) {
+        const M4StagedTransition *record = &staged[t];
+        size_t target = position[record->destination]++;
+        if (target >= plan->offset[record->destination + 1U]) {
+            free(position);
+            free(staged);
+            m4_layer_plan_destroy(plan);
+            die("frontier layer incoming-row overflow");
+        }
+        plan->incoming[target].source = record->source;
+        plan->incoming[target].edges = record->edges;
+        plan->incoming[target].weight = record->weight;
+    }
+    for (size_t destination = 0U; destination < next->count;
+         ++destination) {
+        if (position[destination] != plan->offset[destination + 1U]) {
+            free(position);
+            free(staged);
+            m4_layer_plan_destroy(plan);
+            die("frontier layer incoming-row count mismatch");
+        }
+    }
+    free(position);
+    free(staged);
+}
+
+static void *m4_layer_worker(void *argument)
+{
+    M4WorkerTask *task = argument;
+    for (size_t destination_index = task->first_destination;
+         destination_index < task->past_last_destination;
+         ++destination_index) {
+        PolynomialState *destination = &task->next->item[destination_index];
+        size_t first = task->plan->offset[destination_index];
+        size_t past_last = task->plan->offset[destination_index + 1U];
+        for (size_t t = first; t < past_last; ++t) {
+            const M4IncomingTransition *transition =
+                &task->plan->incoming[t];
+            if (transition->source >= task->current->count) {
+                task->invariant_error = true;
+                continue;
+            }
+            const PolynomialState *source =
+                &task->current->item[transition->source];
+            for (int edges = 0; edges <= task->maximum_edges; ++edges) {
+                if (mpz_sgn(source->coefficient[edges]) == 0) {
+                    continue;
+                }
+                int destination_edges = edges + transition->edges;
+                if (destination_edges > task->n) {
+                    task->invariant_error = true;
+                    continue;
+                }
+                mpz_addmul_ui(destination->coefficient[destination_edges],
+                              source->coefficient[edges],
+                              transition->weight);
+                if (task->addmuls == UINT64_MAX) {
+                    task->invariant_error = true;
+                } else {
+                    ++task->addmuls;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
+static void m4_apply_staged_layer(const PolynomialMap *current,
+                                  PolynomialMap *next,
+                                  const M4LayerPlan *plan, int n,
+                                  int maximum_edges, DpStats *stats)
+{
+    size_t thread_count = m4_select_worker_threads(next->count);
+    if (thread_count > stats->worker_threads) {
+        stats->worker_threads = thread_count;
+    }
+    pthread_t thread[M4_MAX_THREADS];
+    M4WorkerTask task[M4_MAX_THREADS];
+    memset(thread, 0, sizeof(thread));
+    memset(task, 0, sizeof(task));
+
+    size_t total_work = checked_add_size(plan->transition_count, next->count);
+    size_t boundary = 0U;
+    size_t completed_work = 0U;
+    for (size_t worker = 0U; worker < thread_count; ++worker) {
+        task[worker].current = current;
+        task[worker].next = next;
+        task[worker].plan = plan;
+        task[worker].n = n;
+        task[worker].maximum_edges = maximum_edges;
+        task[worker].first_destination = boundary;
+        if (worker + 1U == thread_count) {
+            boundary = next->count;
+        } else {
+            size_t target = total_work * (worker + 1U) / thread_count;
+            while (boundary < next->count) {
+                size_t row_work = checked_add_size(
+                    plan->offset[boundary + 1U] - plan->offset[boundary],
+                    1U);
+                if (completed_work + row_work > target &&
+                    boundary > task[worker].first_destination) {
+                    break;
+                }
+                completed_work = checked_add_size(completed_work, row_work);
+                ++boundary;
+            }
+        }
+        task[worker].past_last_destination = boundary;
+    }
+
+    size_t created = 0U;
+    for (size_t worker = 1U; worker < thread_count; ++worker) {
+        int error = pthread_create(&thread[worker], NULL, m4_layer_worker,
+                                   &task[worker]);
+        if (error != 0) {
+            for (size_t joined = 1U; joined <= created; ++joined) {
+                (void)pthread_join(thread[joined], NULL);
+            }
+            fprintf(stderr, "error: cannot create frontier worker: %s\n",
+                    strerror(error));
+            exit(EXIT_FAILURE);
+        }
+        ++created;
+    }
+    (void)m4_layer_worker(&task[0]);
+    for (size_t worker = 1U; worker < thread_count; ++worker) {
+        int error = pthread_join(thread[worker], NULL);
+        if (error != 0) {
+            fprintf(stderr, "error: cannot join frontier worker: %s\n",
+                    strerror(error));
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    for (size_t worker = 0U; worker < thread_count; ++worker) {
+        if (task[worker].invariant_error) {
+            die("parallel frontier transition invariant failed");
+        }
+        if (stats->polynomial_addmuls > UINT64_MAX - task[worker].addmuls) {
+            die("polynomial operation counter overflow");
+        }
+        stats->polynomial_addmuls += task[worker].addmuls;
+    }
+}
+#endif
+
 static mpz_t *compute_sequence(int maximum_n, int k, FILE *stream,
                                DpStats *stats)
 {
     memset(stats, 0, sizeof(*stats));
+    stats->worker_threads = 1U;
     double start = monotonic_seconds();
     size_t coefficient_count = (size_t)maximum_n + 1U;
     mpz_t *answer = mpz_array_create(coefficient_count);
@@ -745,6 +1094,14 @@ static mpz_t *compute_sequence(int maximum_n, int k, FILE *stream,
         if (next->count != 0U) {
             die("next frontier-state map was not empty");
         }
+#ifndef A179957_04_NO_THREADS
+        M4LayerPlan plan;
+        m4_stage_layer(current, next, frontier_size, frontier_width,
+                       &plan, stats);
+        m4_apply_staged_layer(current, next, &plan, n, maximum_edges,
+                              stats);
+        m4_layer_plan_destroy(&plan);
+#else
         for (size_t state_index = 0U;
              state_index < current->count; ++state_index) {
             const PolynomialState *source = &current->item[state_index];
@@ -777,10 +1134,10 @@ static mpz_t *compute_sequence(int maximum_n, int k, FILE *stream,
                 }
             }
         }
+#endif
         update_peaks(stats, current->count, next->count,
                      coefficient_count);
-        polynomial_map_destroy(current);
-        polynomial_map_init(current, coefficient_count);
+        polynomial_map_reset(current);
         current_index = next_index;
     }
 
@@ -988,9 +1345,10 @@ static void print_stats(int maximum_n, int k, const DpStats *stats)
 {
     fprintf(stderr,
             "179957_04: k=%d, n=0..%d, linear-forest frontier DP, "
-            "peak states=%zu, peak frontier coefficient slots=%zu, "
+            "threads=%zu, peak states=%zu, "
+            "peak frontier coefficient slots=%zu, "
             "state transitions=%llu, polynomial addmuls=%llu, %.3f s\n",
-            k, maximum_n, stats->peak_active_states,
+            k, maximum_n, stats->worker_threads, stats->peak_active_states,
             stats->peak_frontier_coefficient_slots,
             (unsigned long long)stats->state_transition_applications,
             (unsigned long long)stats->polynomial_addmuls,
@@ -1170,14 +1528,16 @@ static void produce_file(const char *argv0, int maximum_n, int k)
 static void usage(const char *program)
 {
     fprintf(stderr,
-            "usage: %s [MAX_N] [--k K]\n"
-            "       %s --upto MAX_N [--k K]\n"
-            "       %s --term N [--k K]\n"
-            "       %s --check [MAX_N] [--k K]\n"
+            "usage: %s [MAX_N] [--k K] [--threads T]\n"
+            "       %s --upto MAX_N [--k K] [--threads T]\n"
+            "       %s --term N [--k K] [--threads T]\n"
+            "       %s --check [MAX_N] [--k K] [--threads T]\n"
             "\n"
             "N and MAX_N may be %d..%d; all values use GMP.\n"
             "K may be 1..%d and defaults to %d; large K can hit the "
             "explicit state guard.\n"
+            "T may be 1..64.  Without --threads, the online CPU count is "
+            "used for large layers (at most 16 threads).\n"
             "The default is --upto %d.  A range run writes "
             "b179957_04_kK.txt beside the executable.\n",
             program, program, program, program,
@@ -1199,6 +1559,7 @@ int main(int argc, char **argv)
     bool have_mode = false;
     int k = DEFAULT_K;
     bool have_k = false;
+    bool have_threads = false;
     for (int argument = 1; argument < argc; ++argument) {
         const char *text = argv[argument];
         if (strcmp(text, "--k") == 0) {
@@ -1209,6 +1570,18 @@ int main(int argc, char **argv)
             k = parse_bounded_integer(argv[++argument], "K", 1,
                                       MAX_SUPPORTED_K);
             have_k = true;
+        } else if (strcmp(text, "--threads") == 0) {
+            if (have_threads || argument + 1 >= argc) {
+                usage(argv[0]);
+                return EXIT_FAILURE;
+            }
+#ifndef A179957_04_NO_THREADS
+            m4_requested_threads = parse_bounded_integer(
+                argv[++argument], "T", 1, M4_MAX_THREADS);
+#else
+            (void)parse_bounded_integer(argv[++argument], "T", 1, 1);
+#endif
+            have_threads = true;
         } else if (strcmp(text, "--term") == 0 ||
                    strcmp(text, "--upto") == 0) {
             if (have_mode || have_n || argument + 1 >= argc) {
