@@ -163,5 +163,7 @@ if $PROGRAM_NAME == __FILE__
     exit 1
   end
   k, nmax = ARGV[0].to_i, (ARGV[1] || 20).to_i
-  PermGap.series(k, nmax).each_with_index { |v, i| puts "a_#{k}(#{i + 1}) = #{v}" }
+  PermGap.series(k, nmax).each{|v|
+    print "#{v}, "
+  }
 end
