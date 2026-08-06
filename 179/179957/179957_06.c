@@ -48,7 +48,8 @@
  *
  *   Sum_i B_{k,i}(z) A_k^(i)(z) = P_k(z)/R_k(z).               (3)
  *
- * The exact integer coefficients of B, P and R are in
+ * The exact integer coefficients of B, P and R and their complete
+ * human-readable polynomial expansions for every k are in
  * 179957_06_data.inc.  The differential orders are 1, 2 and 5 for k=2,3,4.
  * After removal of common factors their operator degrees are respectively
  * (4,5), (28,29,29), and (300,301,301,300,299,298).
