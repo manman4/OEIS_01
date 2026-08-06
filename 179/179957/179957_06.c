@@ -1,14 +1,19 @@
 /*
- * Minimum-jump permutations by a proved scalar holonomic recurrence.
+ * Minimum-jump permutations by proved fixed-k recurrences.
  * A179957 is the k=4 specialization.
  *
  * We count permutations p of [n] satisfying
  *
  *                 |p(i)-p(i-1)| >= k  (i>1).
  *
- * This program supports k=2,3,4.  Unlike 03--05, its runtime state is only
+ * This program supports k=2,3,4,5.  For k=2,3,4 its runtime state is only
  * the final scalar sequence: no frontier state vector and no polynomial
- * Q_n(x) is advanced.  The recurrence is NOT a numerical guess.
+ * Q_n(x) is advanced.  For k=5, the analogous scalar AZ equation has
+ * thousands of coefficients, so the program deliberately uses the much
+ * smaller certified order-79 polynomial recurrence from 179957_05.c.  That
+ * branch constructs the exact 320-state transfer matrix on every run and
+ * verifies P(M)v=0 before using the recurrence.  Neither branch is a
+ * numerical guess.
  *
  * Mathematical proof
  * ------------------
@@ -77,7 +82,7 @@
  *   Sum_i B_{k,i}(z) A_k^(i)(z) = P_k(z)/R_k(z).               (3)
  *
  * The exact integer coefficients of B, P and R and their complete
- * human-readable polynomial expansions for every k are in
+ * human-readable polynomial expansions for k=2,3,4 are in
  * 179957_06_data.inc.  The differential orders are 1, 2 and 5 for k=2,3,4.
  * After removal of common factors their operator degrees are respectively
  * (4,5), (28,29,29), and (300,301,301,300,299,298).
@@ -97,24 +102,30 @@
  * rational boundary recurrence, and the exact divisibility checks in this
  * program prove every computed value.  No fitted or guessed recurrence is
  * used.  --check additionally compares with an independent subset DP
- * through n=16 and with fixed known prefixes.
+ * through n=16 and with fixed known prefixes.  For k=5, the proof is the
+ * exact finite matrix certificate described above and in 179957_05.c;
+ * --check also compares that recurrence with the independent 03 matrix
+ * evaluation.
  *
  * The underlying generalized-rook/linear-forest argument is described by
  * I. Gessel, "Generalized Rook Polynomials and Orthogonal Polynomials".  The
  * continuous creative-telescoping step follows the exact AZ implementation
  * used by G. Spahn and D. Zeilberger in ResPerms (2022).
  *
- * Complexity for fixed k: O(C_k*N) GMP add-multiplications and O(L_k)
+ * Complexity for fixed k=2,3,4: O(C_k*N) GMP add-multiplications and O(L_k)
  * big integers, where C_k is the stored operator size and L_k is its maximum
  * lag (4, 28, 300 for k=2,3,4).  In particular, it is polynomial in N.
+ * The k=5 fallback uses O(N^2) exact polynomial work and O(N) GMP objects
+ * with k fixed (the constants include 320 states and recurrence order 79).
  *
  * Build:
- *   clang -O3 -std=c11 -Wall -Wextra -Wpedantic \
+ *   clang -O3 -std=c11 -Wall -Wextra -Wpedantic -pthread \
  *     -I/opt/homebrew/include -L/opt/homebrew/lib \
  *     179957_06.c -lgmp -o 179957_06
  *
  * Examples:
  *   ./179957_06 --k 4 --upto 500
+ *   ./179957_06 --k 5 --upto 500 --threads 8
  *   ./179957_06 --k 3 --term 500
  *   ./179957_06 --k 2 --check 100
  *
@@ -122,6 +133,18 @@
  * follow OEIS b-file policy, output stops before the first value having more
  * than 1000 decimal digits; computation still continues through MAX_N.
  */
+
+/*
+ * Reuse the independently certified k=5 engine as an embedded branch.  The
+ * tag changes only diagnostics and b-file names from 05 to 06; the exact
+ * transfer matrix, polynomial recurrence, and runtime certificate remain
+ * the same source definitions, avoiding a hand-copied second version.
+ */
+#define M5_PROGRAM_TAG "06"
+#define A179957_05_EMBEDDED_MAIN m6_embedded_m5_main
+#include "179957_05.c"
+#undef A179957_05_EMBEDDED_MAIN
+#undef M5_PROGRAM_TAG
 
 #include <errno.h>
 #include <inttypes.h>
@@ -137,7 +160,7 @@
 
 #define M6_DEFAULT_K 4
 #define M6_MIN_K 2
-#define M6_MAX_K 4
+#define M6_MAX_K 5
 #define M6_DEFAULT_N 30
 #define M6_DEFAULT_CHECK_N 100
 #define M6_MAX_N 10000
@@ -255,7 +278,7 @@ static const M6Source *m6_find_source(int k)
             return &m6_source_table[i];
         }
     }
-    m6_die("proved scalar recurrence is available only for k=2,3,4");
+    m6_die("proved scalar AZ recurrence is available only for k=2,3,4");
     return NULL;
 }
 
@@ -676,12 +699,14 @@ static int m6_check(int maximum_n, int k)
 static void m6_usage(const char *program)
 {
     fprintf(stderr,
-            "usage: %s [MAX_N] [--k K]\n"
-            "       %s --upto MAX_N [--k K]\n"
-            "       %s --term N [--k K]\n"
-            "       %s --check [MAX_N] [--k K]\n"
-            "Proved scalar recurrences are available for K=2,3,4; "
-            "the default is 4; N is 0..%d.\n"
+            "usage: %s [MAX_N] [--k K] [--threads T]\n"
+            "       %s --upto MAX_N [--k K] [--threads T]\n"
+            "       %s --term N [--k K] [--threads T]\n"
+            "       %s --check [MAX_N] [--k K] [--threads T]\n"
+            "Proved scalar AZ recurrences are available for K=2,3,4; "
+            "K=5 uses the certified order-79 transfer recurrence. "
+            "The default is 4; N is 0..%d.\n"
+            "T is 1..64 and applies only to K=5.\n"
             "A range run writes b179957_06_kK.txt, stopping before the "
             "first term over %lu digits.\n",
             program, program, program, program, M6_MAX_N,
@@ -701,6 +726,7 @@ int main(int argc, char **argv)
     int k = M6_DEFAULT_K;
     bool have_n = false;
     bool have_k = false;
+    bool have_threads = false;
     bool have_mode = false;
     for (int argument = 1; argument < argc; ++argument) {
         const char *text = argv[argument];
@@ -712,6 +738,14 @@ int main(int argc, char **argv)
             k = m6_parse_integer(argv[++argument], "K",
                                  M6_MIN_K, M6_MAX_K);
             have_k = true;
+        } else if (strcmp(text, "--threads") == 0) {
+            if (have_threads || argument + 1 >= argc) {
+                m6_usage(argv[0]);
+                return EXIT_FAILURE;
+            }
+            m3_requested_threads = m6_parse_integer(
+                argv[++argument], "T", 1, M3_MAX_THREADS);
+            have_threads = true;
         } else if (strcmp(text, "--term") == 0 ||
                    strcmp(text, "--upto") == 0) {
             if (have_mode || have_n || argument + 1 >= argc) {
@@ -752,6 +786,12 @@ int main(int argc, char **argv)
     if (!have_n) {
         maximum_n = mode == M6_RUN_CHECK
                         ? M6_DEFAULT_CHECK_N : M6_DEFAULT_N;
+    }
+    if (have_threads && k != 5) {
+        m6_die("--threads applies only to the k=5 transfer branch");
+    }
+    if (k == 5) {
+        return m6_embedded_m5_main(argc, argv);
     }
     if (mode == M6_RUN_CHECK) {
         return m6_check(maximum_n, k);
