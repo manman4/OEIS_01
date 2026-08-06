@@ -22,6 +22,14 @@
  * (2,4,2), (9,26,6), (49,200,21), (320,1730,79), and
  * (2357,16331,314), respectively.
  *
+ * The standalone program uses the same transposed sparse-matrix kernel as
+ * 03 to parallelize the two rolling certificate matrix products.  Seed Q_n
+ * extraction uses per-worker partial polynomials, and later recurrence steps
+ * assign disjoint output degrees to workers.  Thus source data remain
+ * read-only and every GMP destination has one writer.  This changes neither
+ * the recurrence nor the exact Horner certificate.  --threads T selects
+ * 1..64 workers; the default uses the online CPU count (capped at 16).
+ *
  * Since the same matrix M advances every later vector and polynomial
  * coefficients commute with M, multiplying the verified identity by M^r
  * proves it for every later n.  This finite vector identity is the runtime
@@ -40,7 +48,7 @@
  * All arithmetic is exact GMP arithmetic.
  *
  * Build:
- *   clang -O3 -std=c11 -Wall -Wextra -Wpedantic \
+ *   clang -O3 -std=c11 -Wall -Wextra -Wpedantic -pthread \
  *     -I/opt/homebrew/include -L/opt/homebrew/lib \
  *     179957_05.c -lgmp -o 179957_05
  *
@@ -50,6 +58,7 @@
  *   ./179957_05 --k 4 --check 80
  *   ./179957_05 --k 5 --upto 1000
  *   ./179957_05 --k 6 --upto 1000
+ *   ./179957_05 --k 6 --upto 1000 --threads 8
  *
  * Range runs still compute every requested term, but their OEIS b-file stops
  * immediately before the first term having more than 1000 decimal digits.
@@ -58,8 +67,14 @@
  */
 
 #define A179957_03_NO_MAIN
+#define A179957_03_ENABLE_THREADS
 #include "179957_03.c"
+#undef A179957_03_ENABLE_THREADS
 #undef A179957_03_NO_MAIN
+
+#ifndef M5_PROGRAM_TAG
+#define M5_PROGRAM_TAG "05"
+#endif
 
 #define M5_DEFAULT_K 4
 #define M5_MIN_K 2
@@ -67,6 +82,7 @@
 #define M5_MAX_ORDER 314
 #define M5_DEFAULT_CHECK_N 80
 #define M5_BFILE_MAX_DIGITS 1000UL
+#define M5_AUTO_WORK_THRESHOLD 100000U
 
 typedef struct {
     uint16_t power;
@@ -194,6 +210,7 @@ typedef struct {
     uint64_t certificate_scalar_checks;
     uint64_t certificate_addmuls;
     uint64_t recurrence_addmuls;
+    size_t worker_threads;
     double seconds;
 } M5Stats;
 
@@ -299,6 +316,27 @@ static void m5_addmul_runtime(mpz_t destination, const mpz_t source,
     }
 }
 
+static size_t m5_select_worker_threads(size_t work_units,
+                                       size_t independent_units)
+{
+    size_t threads;
+    if (m3_requested_threads > 0) {
+        threads = (size_t)m3_requested_threads;
+    } else if (work_units < M5_AUTO_WORK_THRESHOLD) {
+        threads = 1U;
+    } else {
+        long online = sysconf(_SC_NPROCESSORS_ONLN);
+        threads = online > 0 ? (size_t)online : 1U;
+        if (threads > M3_AUTO_THREAD_CAP) {
+            threads = M3_AUTO_THREAD_CAP;
+        }
+    }
+    if (threads > independent_units) {
+        threads = independent_units;
+    }
+    return threads == 0U ? 1U : threads;
+}
+
 static mpz_t *m5_make_start_vector(const M3Matrix *matrix,
                                    const M5Recurrence *recurrence,
                                    size_t width, M3Stats *matrix_stats)
@@ -385,23 +423,121 @@ static void m5_verify_certificate(const M3Matrix *matrix,
     }
 }
 
-static void m5_vector_to_q(const M3Matrix *matrix, const mpz_t *vector,
-                           const M5Recurrence *recurrence,
-                           size_t vector_width, int n, mpz_t *q)
+typedef struct {
+    size_t thread_count;
+    size_t width;
+    mpz_t **partial;
+} M5QWorkspace;
+
+typedef struct {
+    const M3Matrix *matrix;
+    const mpz_t *vector;
+    size_t vector_width;
+    int maximum_edges;
+    size_t first_state;
+    size_t past_last_state;
+    mpz_t *partial;
+} M5QTask;
+
+static void m5_q_workspace_init(M5QWorkspace *workspace,
+                                size_t state_count, size_t width)
 {
-    int maximum_edges = n == 0 ? 0 : n - 1;
-    for (int edges = 0; edges <= maximum_edges; ++edges) {
-        mpz_set_ui(q[edges], 0UL);
+    memset(workspace, 0, sizeof(*workspace));
+    size_t work_units = checked_product_size(state_count, width);
+    workspace->thread_count = m5_select_worker_threads(work_units,
+                                                        state_count);
+    workspace->width = width;
+    workspace->partial = xcalloc(workspace->thread_count,
+                                  sizeof(*workspace->partial));
+    for (size_t worker = 0U; worker < workspace->thread_count; ++worker) {
+        workspace->partial[worker] = mpz_array_create(width);
     }
-    for (size_t state = 0U; state < matrix->registry.count; ++state) {
-        unsigned long orientation = final_orientation_weight(
-            matrix->registry.item[state].key, recurrence->k - 1);
-        size_t base = checked_product_size(state, vector_width);
-        for (int edges = 0; edges <= maximum_edges; ++edges) {
-            if (mpz_sgn(vector[base + (size_t)edges]) != 0) {
-                mpz_addmul_ui(q[edges], vector[base + (size_t)edges],
+}
+
+static void m5_q_workspace_destroy(M5QWorkspace *workspace)
+{
+    for (size_t worker = 0U; worker < workspace->thread_count; ++worker) {
+        mpz_array_destroy(workspace->partial[worker], workspace->width);
+    }
+    free(workspace->partial);
+    memset(workspace, 0, sizeof(*workspace));
+}
+
+static void *m5_q_worker(void *argument)
+{
+    M5QTask *task = argument;
+    for (int edges = 0; edges <= task->maximum_edges; ++edges) {
+        mpz_set_ui(task->partial[edges], 0UL);
+    }
+    for (size_t state = task->first_state;
+         state < task->past_last_state; ++state) {
+        unsigned long orientation = task->matrix->orientation[state];
+        size_t base = checked_product_size(state, task->vector_width);
+        for (int edges = 0; edges <= task->maximum_edges; ++edges) {
+            if (mpz_sgn(task->vector[base + (size_t)edges]) != 0) {
+                mpz_addmul_ui(task->partial[edges],
+                              task->vector[base + (size_t)edges],
                               orientation);
             }
+        }
+    }
+    return NULL;
+}
+
+static void m5_vector_to_q(const M3Matrix *matrix, const mpz_t *vector,
+                           size_t vector_width, int n, mpz_t *q,
+                           M5QWorkspace *workspace, M5Stats *stats)
+{
+    int maximum_edges = n == 0 ? 0 : n - 1;
+    if ((size_t)maximum_edges >= workspace->width) {
+        die("Q workspace polynomial degree overflow");
+    }
+    size_t thread_count = workspace->thread_count;
+    if (thread_count > stats->worker_threads) {
+        stats->worker_threads = thread_count;
+    }
+    pthread_t thread[M3_MAX_THREADS];
+    M5QTask task[M3_MAX_THREADS];
+    memset(thread, 0, sizeof(thread));
+    memset(task, 0, sizeof(task));
+    for (size_t worker = 0U; worker < thread_count; ++worker) {
+        task[worker].matrix = matrix;
+        task[worker].vector = vector;
+        task[worker].vector_width = vector_width;
+        task[worker].maximum_edges = maximum_edges;
+        task[worker].first_state =
+            matrix->registry.count * worker / thread_count;
+        task[worker].past_last_state =
+            matrix->registry.count * (worker + 1U) / thread_count;
+        task[worker].partial = workspace->partial[worker];
+    }
+    size_t created = 0U;
+    for (size_t worker = 1U; worker < thread_count; ++worker) {
+        int error = pthread_create(&thread[worker], NULL, m5_q_worker,
+                                   &task[worker]);
+        if (error != 0) {
+            for (size_t joined = 1U; joined <= created; ++joined) {
+                (void)pthread_join(thread[joined], NULL);
+            }
+            fprintf(stderr, "error: cannot create Q worker: %s\n",
+                    strerror(error));
+            exit(EXIT_FAILURE);
+        }
+        ++created;
+    }
+    (void)m5_q_worker(&task[0]);
+    for (size_t worker = 1U; worker < thread_count; ++worker) {
+        int error = pthread_join(thread[worker], NULL);
+        if (error != 0) {
+            fprintf(stderr, "error: cannot join Q worker: %s\n",
+                    strerror(error));
+            exit(EXIT_FAILURE);
+        }
+    }
+    for (int edges = 0; edges <= maximum_edges; ++edges) {
+        mpz_set_ui(q[edges], 0UL);
+        for (size_t worker = 0U; worker < thread_count; ++worker) {
+            mpz_add(q[edges], q[edges], workspace->partial[worker][edges]);
         }
     }
 }
@@ -426,6 +562,63 @@ static void m5_seed_small_q(int n, mpz_t *q)
     }
 }
 
+typedef struct {
+    int n;
+    const M5Recurrence *recurrence;
+    const M5RuntimeRecurrence *runtime;
+    mpz_t **ring;
+    mpz_t *temporary;
+    size_t width;
+    int first_degree;
+    int past_last_degree;
+    uint64_t addmuls;
+    bool invariant_error;
+} M5RecurrenceTask;
+
+static void *m5_recurrence_worker(void *argument)
+{
+    M5RecurrenceTask *task = argument;
+    for (int destination_degree = task->first_degree;
+         destination_degree < task->past_last_degree;
+         ++destination_degree) {
+        mpz_set_ui(task->temporary[destination_degree], 0UL);
+        for (int lag = 1; lag <= task->recurrence->order; ++lag) {
+            const mpz_t *source =
+                task->ring[(task->n - lag) % task->recurrence->order];
+            int source_maximum = task->n - lag - 1;
+            const M5RuntimePolynomial *polynomial =
+                &task->runtime->polynomial[lag];
+            for (size_t t = 0U; t < polynomial->count; ++t) {
+                int source_degree = destination_degree -
+                                    polynomial->term[t].power;
+                if (source_degree < 0 || source_degree > source_maximum) {
+                    continue;
+                }
+                if ((size_t)destination_degree >= task->width) {
+                    task->invariant_error = true;
+                    continue;
+                }
+                if (mpz_sgn(source[source_degree]) == 0) {
+                    continue;
+                }
+                if (destination_degree >= task->n) {
+                    task->invariant_error = true;
+                    continue;
+                }
+                m5_addmul_runtime(task->temporary[destination_degree],
+                                  source[source_degree],
+                                  &polynomial->term[t], -1);
+                if (task->addmuls == UINT64_MAX) {
+                    task->invariant_error = true;
+                } else {
+                    ++task->addmuls;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
 static mpz_t *m5_recurrence_step(int n,
                                  const M5Recurrence *recurrence,
                                  const M5RuntimeRecurrence *runtime,
@@ -433,30 +626,63 @@ static mpz_t *m5_recurrence_step(int n,
                                  mpz_t *temporary, size_t width,
                                  M5Stats *stats)
 {
-    for (int degree = 0; degree <= n - 1; ++degree) {
-        mpz_set_ui(temporary[degree], 0UL);
-    }
+    size_t monomial_count = 0U;
     for (int lag = 1; lag <= recurrence->order; ++lag) {
-        const mpz_t *source = ring[(n - lag) % recurrence->order];
-        int source_maximum = n - lag - 1;
-        const M5RuntimePolynomial *polynomial = &runtime->polynomial[lag];
-        for (size_t t = 0U; t < polynomial->count; ++t) {
-            int power = polynomial->term[t].power;
-            for (int degree = 0; degree <= source_maximum; ++degree) {
-                if (mpz_sgn(source[degree]) == 0) {
-                    continue;
-                }
-                int destination_degree = degree + power;
-                if (destination_degree >= n ||
-                    (size_t)destination_degree >= width) {
-                    die("recurrence polynomial degree overflow");
-                }
-                m5_addmul_runtime(temporary[destination_degree],
-                                  source[degree], &polynomial->term[t], -1);
-                increment_u64(&stats->recurrence_addmuls,
-                              "recurrence polynomial operation");
+        monomial_count = checked_add_size(
+            monomial_count, runtime->polynomial[lag].count);
+    }
+    size_t work_units = checked_product_size(monomial_count, (size_t)n);
+    size_t thread_count = m5_select_worker_threads(work_units, (size_t)n);
+    if (thread_count > stats->worker_threads) {
+        stats->worker_threads = thread_count;
+    }
+    pthread_t thread[M3_MAX_THREADS];
+    M5RecurrenceTask task[M3_MAX_THREADS];
+    memset(thread, 0, sizeof(thread));
+    memset(task, 0, sizeof(task));
+    for (size_t worker = 0U; worker < thread_count; ++worker) {
+        task[worker].n = n;
+        task[worker].recurrence = recurrence;
+        task[worker].runtime = runtime;
+        task[worker].ring = ring;
+        task[worker].temporary = temporary;
+        task[worker].width = width;
+        task[worker].first_degree =
+            (int)((size_t)n * worker / thread_count);
+        task[worker].past_last_degree =
+            (int)((size_t)n * (worker + 1U) / thread_count);
+    }
+    size_t created = 0U;
+    for (size_t worker = 1U; worker < thread_count; ++worker) {
+        int error = pthread_create(&thread[worker], NULL,
+                                   m5_recurrence_worker, &task[worker]);
+        if (error != 0) {
+            for (size_t joined = 1U; joined <= created; ++joined) {
+                (void)pthread_join(thread[joined], NULL);
             }
+            fprintf(stderr, "error: cannot create recurrence worker: %s\n",
+                    strerror(error));
+            exit(EXIT_FAILURE);
         }
+        ++created;
+    }
+    (void)m5_recurrence_worker(&task[0]);
+    for (size_t worker = 1U; worker < thread_count; ++worker) {
+        int error = pthread_join(thread[worker], NULL);
+        if (error != 0) {
+            fprintf(stderr, "error: cannot join recurrence worker: %s\n",
+                    strerror(error));
+            exit(EXIT_FAILURE);
+        }
+    }
+    for (size_t worker = 0U; worker < thread_count; ++worker) {
+        if (task[worker].invariant_error) {
+            die("parallel recurrence invariant failed");
+        }
+        if (stats->recurrence_addmuls > UINT64_MAX - task[worker].addmuls) {
+            die("recurrence polynomial operation counter overflow");
+        }
+        stats->recurrence_addmuls += task[worker].addmuls;
     }
     for (int degree = 0; degree <= n - 1; ++degree) {
         if (mpz_sgn(temporary[degree]) < 0) {
@@ -478,6 +704,7 @@ static mpz_t *m5_compute_sequence(int maximum_n, int k, FILE *stream,
     int seed_last_n = certificate_n - 1;
     size_t certificate_width = (size_t)certificate_n + 1U;
     memset(stats, 0, sizeof(*stats));
+    stats->worker_threads = 1U;
     double started = monotonic_seconds();
     size_t width = (size_t)maximum_n + 1U;
     mpz_t *answer = mpz_array_create(width);
@@ -499,10 +726,15 @@ static mpz_t *m5_compute_sequence(int maximum_n, int k, FILE *stream,
 
     M3Stats matrix_stats;
     memset(&matrix_stats, 0, sizeof(matrix_stats));
+    matrix_stats.worker_threads = 1U;
     size_t certificate_slots = checked_product_size(
         matrix.registry.count, certificate_width);
-    stats->certificate_peak_coefficient_slots = checked_product_size(
-        certificate_slots, 5U);
+    M5QWorkspace q_workspace;
+    m5_q_workspace_init(&q_workspace, matrix.registry.count,
+                        certificate_width);
+    stats->certificate_peak_coefficient_slots = checked_add_size(
+        checked_product_size(certificate_slots, 5U),
+        checked_product_size(q_workspace.thread_count, certificate_width));
 
     mpz_t *factorial = mpz_array_create(width);
     mpz_set_ui(factorial[0], 1UL);
@@ -553,16 +785,16 @@ static mpz_t *m5_compute_sequence(int maximum_n, int k, FILE *stream,
         int vector_n = saturation_n + step;
         if (vector_n <= seed_end) {
             mpz_t *q = ring[vector_n % recurrence->order];
-            m5_vector_to_q(&matrix, sequence_current, recurrence,
-                           certificate_width, vector_n, q);
+            m5_vector_to_q(&matrix, sequence_current, certificate_width,
+                           vector_n, q, &q_workspace, stats);
             m3_evaluate_q((const mpz_t *)q, vector_n,
                           (const mpz_t *)factorial, answer[vector_n]);
             write_complete_term(stream, vector_n, answer[vector_n]);
         } else if (vector_n == certificate_n &&
                    matrix_certificate_q != NULL) {
-            m5_vector_to_q(&matrix, sequence_current, recurrence,
-                           certificate_width, vector_n,
-                           matrix_certificate_q);
+            m5_vector_to_q(&matrix, sequence_current, certificate_width,
+                           vector_n, matrix_certificate_q, &q_workspace,
+                           stats);
         }
         if (step < recurrence->order) {
             mpz_t *sequence_next = step == 0
@@ -588,6 +820,11 @@ static mpz_t *m5_compute_sequence(int maximum_n, int k, FILE *stream,
     }
     m5_verify_certificate(&matrix, (const mpz_t *)horner_current,
                           certificate_width, stats);
+    stats->worker_threads = matrix_stats.worker_threads;
+    if (q_workspace.thread_count > stats->worker_threads) {
+        stats->worker_threads = q_workspace.thread_count;
+    }
+    m5_q_workspace_destroy(&q_workspace);
     mpz_array_destroy(start_vector, certificate_slots);
     mpz_array_destroy(sequence_work[0], certificate_slots);
     mpz_array_destroy(sequence_work[1], certificate_slots);
@@ -640,11 +877,13 @@ static void m5_print_stats(int maximum_n, int k, const M5Stats *stats)
         (double)stats->certificate_peak_coefficient_slots *
         (double)sizeof(mpz_t) / (1024.0 * 1024.0);
     fprintf(stderr,
-            "179957_05: k=%d, n=0..%d, certified order-%d recurrence, "
-            "certificate matrix=%zu states/%zu edges, certificate "
+            "179957_" M5_PROGRAM_TAG
+            ": k=%d, n=0..%d, certified order-%d recurrence, "
+            "threads=%zu, certificate matrix=%zu states/%zu edges, certificate "
             "stream slots=%zu (%.1f MiB GMP headers), scalars=%llu, "
             "certificate addmuls=%llu, recurrence addmuls=%llu, %.3f s\n",
-            k, maximum_n, recurrence->order, stats->certificate_states,
+            k, maximum_n, recurrence->order, stats->worker_threads,
+            stats->certificate_states,
             stats->certificate_matrix_edges,
             stats->certificate_peak_coefficient_slots,
             certificate_header_mib,
@@ -704,9 +943,10 @@ static void m5_write_file(const char *argv0, int maximum_n, int k,
     char final_name[64];
     char part_name[64];
     int final_length = snprintf(final_name, sizeof(final_name),
-                                "b179957_05_k%d.txt", k);
+                                "b179957_" M5_PROGRAM_TAG "_k%d.txt", k);
     int part_length = snprintf(part_name, sizeof(part_name),
-                               "b179957_05_k%d_part.txt", k);
+                               "b179957_" M5_PROGRAM_TAG
+                               "_k%d_part.txt", k);
     if (final_length < 0 || (size_t)final_length >= sizeof(final_name) ||
         part_length < 0 || (size_t)part_length >= sizeof(part_name)) {
         die("recurrence output filename overflow");
@@ -760,18 +1000,25 @@ static void m5_write_file(const char *argv0, int maximum_n, int k,
 static void m5_usage(const char *program)
 {
     fprintf(stderr,
-            "usage: %s [MAX_N] [--k K]\n"
-            "       %s --upto MAX_N [--k K]\n"
-            "       %s --term N [--k K]\n"
-            "       %s --check [MAX_N] [--k K]\n"
+            "usage: %s [MAX_N] [--k K] [--threads T]\n"
+            "       %s --upto MAX_N [--k K] [--threads T]\n"
+            "       %s --term N [--k K] [--threads T]\n"
+            "       %s --check [MAX_N] [--k K] [--threads T]\n"
             "Certified recurrences are available for K=2,3,4,5,6; "
-            "the default is 4; N is 0..10000.\n"
-            "A range run writes b179957_05_kK.txt, stopping before the "
+            "the default is 4; N is 0..10000; T is 1..64.\n"
+            "Without --threads, the online CPU count is used for large "
+            "certificates (at most 16 threads).\n"
+            "A range run writes b179957_" M5_PROGRAM_TAG
+            "_kK.txt, stopping before the "
             "first term over %lu digits.\n",
             program, program, program, program, M5_BFILE_MAX_DIGITS);
 }
 
+#ifdef A179957_05_EMBEDDED_MAIN
+int A179957_05_EMBEDDED_MAIN(int argc, char **argv)
+#else
 int main(int argc, char **argv)
+#endif
 {
     if (argc == 2 &&
         (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
@@ -784,6 +1031,7 @@ int main(int argc, char **argv)
     bool have_mode = false;
     int k = M5_DEFAULT_K;
     bool have_k = false;
+    bool have_threads = false;
     for (int argument = 1; argument < argc; ++argument) {
         const char *text = argv[argument];
         if (strcmp(text, "--k") == 0) {
@@ -794,6 +1042,14 @@ int main(int argc, char **argv)
             k = parse_bounded_integer(argv[++argument], "K",
                                       M5_MIN_K, M5_MAX_K);
             have_k = true;
+        } else if (strcmp(text, "--threads") == 0) {
+            if (have_threads || argument + 1 >= argc) {
+                m5_usage(argv[0]);
+                return EXIT_FAILURE;
+            }
+            m3_requested_threads = parse_bounded_integer(
+                argv[++argument], "T", 1, M3_MAX_THREADS);
+            have_threads = true;
         } else if (strcmp(text, "--term") == 0 ||
                    strcmp(text, "--upto") == 0) {
             if (have_mode || have_n || argument + 1 >= argc) {
