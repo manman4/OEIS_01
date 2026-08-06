@@ -129,6 +129,11 @@ module PermGap
   # ---- the sequence ------------------------------------------------------
 
   # Returns [a_k(0), a_k(1), ..., a_k(nmax)], so that series(k, N)[n] == a_k(n).
+  # If a block is given it is called as each term is finished, which is the only
+  # way to see progress: the later terms take far longer than the early ones.
+  #
+  #   PermGap.series(4, 60) { |n, v| puts "a(#{n}) = #{v}" }
+  #
   # a_k(0) = 1: the empty permutation vacuously satisfies the gap condition, and
   # the formula gives it too (only the empty forest, contributing 0! = 1).
   def series(k, nmax)
@@ -194,6 +199,7 @@ module PermGap
         s += (j.even? ? 1 : -1) * (c >> j) * fact[n - j]   # c is exactly 2^j * F_j
       end
       out << s
+      yield n, s if block_given?
     end
     out
   end
@@ -232,6 +238,7 @@ if $PROGRAM_NAME == __FILE__
     warn "usage: ruby #{__FILE__} K NMAX"
     exit 1
   end
+  $stdout.sync = true
   k, nmax = ARGV[0].to_i, (ARGV[1] || 20).to_i
-  PermGap.series(k, nmax).each_with_index{|v, n| puts "#{n} #{v}"}
+  PermGap.series(k, nmax){|n, v| puts "#{n} #{v}"}
 end
