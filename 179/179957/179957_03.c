@@ -8,6 +8,62 @@
  *   2. build the complete sparse transfer matrix M_k once;
  *   3. apply that immutable matrix to polynomial state vectors.
  *
+ * Proof of the frontier invariant and rational generating function
+ * ----------------------------------------------------------------
+ * Let H_{n,k} have edge {u,v} when 0<|u-v|<k, put w=k-1, and expose
+ * vertices in increasing order.  After n vertices have been exposed, only
+ * n-w+1,...,n can be incident to a future edge.  A frontier state sigma
+ * records, for these at most w vertices, their degrees and their connected-
+ * component partition.  Define
+ *
+ *   V_n(sigma;x) = Sum_F 2^closed(F) x^|F|,                   (T1)
+ *
+ * where F runs over linear forests of the exposed graph with frontier state
+ * sigma, and closed(F) counts nontrivial path components which have already
+ * disappeared from the frontier.
+ *
+ * The empty state has weight 1, proving (T1) initially.  On exposing n+1,
+ * every possible new edge joins n+1 to one of the previous w vertices.  A
+ * linear forest uses zero, one, or two such edges.  build_transitions lists
+ * all these choices, rejects an old degree becoming 3, and rejects joining
+ * vertices already in one component (which would create a cycle).  These
+ * conditions are also sufficient: a graph of maximum degree 2 with no cycle
+ * is a linear forest.  Deleting the chosen edges incident to n+1 uniquely
+ * recovers the predecessor.  Thus accepted transitions are in bijection
+ * with all extensions of the forests counted in (T1), and x is multiplied
+ * by exactly the number of newly selected edges.
+ *
+ * Once the oldest frontier vertex is forgotten, it has no possible future
+ * neighbor.  If this removes the last active vertex of a nontrivial path,
+ * the transition multiplies by 2 for its two orientations, exactly once.
+ * Components still meeting the frontier receive no factor yet.  At the end,
+ * final_orientation_weight supplies 2 for each remaining nontrivial path.
+ * Consequently
+ *
+ *   Q_{n,k}(x) = Sum_sigma V_n(sigma;x) 2^active(sigma)
+ *              = Sum_F 2^c(F) x^|F|,                         (T2)
+ *
+ * with F ranging over all linear forests in H_{n,k}.  This proves that the
+ * matrix output is the inclusion-exclusion polynomial, not merely a value
+ * matching experiment.
+ *
+ * For fixed k, there are finitely many degree/partition states on w slots.
+ * After the frontier is full, the same translation-invariant transition is
+ * used at every step.  With v_w(x) the saturated start row and f the final
+ * orientation column, the matrix built below therefore satisfies
+ *
+ *   Q_{n,k}(x) = v_w(x) M_k(x)^(n-w) f,  n>=w.                (T3)
+ *
+ * Hence
+ *
+ *   Sum_{n>=0} Q_{n,k}(x) z^n
+ *     = Sum_{n=0}^{w-1} Q_{n,k}(x) z^n
+ *       + z^w v_w(x) (I-z M_k(x))^(-1) f.                    (T4)
+ *
+ * Since (I-zM)^(-1)=adj(I-zM)/det(I-zM), (T4) is an exact
+ * rational function N_k(z,x)/D_k(z,x).  Equations (T1)--(T4) are the
+ * transfer-matrix proof used as the starting point of 179957_06.c.
+ *
  * The mathematical invariant and exact GMP evaluation are shared with 04.
  * The source includes 04 with its main renamed so that the carefully checked
  * state canonicalization and transition rules have a single definition; the
@@ -17,9 +73,9 @@
  * Every GMP output coefficient therefore has exactly one writer; source
  * coefficients are read-only until all workers have joined.  --threads T
  * selects 1..64 workers, while the default uses the online CPU count (capped
- * at 16, and one worker for small matrices).  When this file is embedded by
- * 05 for its proof certificate, the original single-thread source-row kernel
- * is retained, so 05 does not acquire a pthread build dependency.
+ * at 16, and one worker for small matrices).  An embedding normally retains
+ * the original single-thread source-row kernel; 05 explicitly enables this
+ * same threaded kernel for its runtime proof certificate.
  *
  * For fixed k, the matrix has S(k) states.  Its entries are small monomials
  * c*x^e (e=0,1,2).  Computing all answers through N takes
@@ -42,15 +98,21 @@
  *   ./179957_03 --k 4 --check
  */
 
-#if defined(__APPLE__) && !defined(A179957_03_NO_MAIN)
+#if !defined(A179957_03_NO_MAIN) || defined(A179957_03_ENABLE_THREADS)
+#define M3_THREADS_ENABLED
+#endif
+
+#if defined(__APPLE__) && defined(M3_THREADS_ENABLED)
 #define _DARWIN_C_SOURCE
 #endif
 
+#define A179957_04_NO_THREADS
 #define main a179957_04_embedded_main
 #include "179957_04.c"
 #undef main
+#undef A179957_04_NO_THREADS
 
-#ifndef A179957_03_NO_MAIN
+#ifdef M3_THREADS_ENABLED
 #include <pthread.h>
 #endif
 
@@ -71,7 +133,7 @@ typedef struct {
     size_t count;
 } M3Row;
 
-#ifndef A179957_03_NO_MAIN
+#ifdef M3_THREADS_ENABLED
 typedef struct {
     size_t source;
     uint8_t edges;
@@ -87,7 +149,7 @@ typedef struct {
 typedef struct {
     PolynomialMap registry; /* coefficient_count=1; used as an exact key hash */
     M3Row *row;
-#ifndef A179957_03_NO_MAIN
+#ifdef M3_THREADS_ENABLED
     M3IncomingRow *incoming;
 #endif
     unsigned long *orientation;
@@ -106,7 +168,7 @@ typedef struct {
     double seconds;
 } M3Stats;
 
-#ifndef A179957_03_NO_MAIN
+#ifdef M3_THREADS_ENABLED
 /* Zero means automatic selection from the online processor count. */
 static int m3_requested_threads = 0;
 static size_t m3_select_worker_threads(size_t state_count);
@@ -187,7 +249,7 @@ static void m3_keyset_step(PolynomialMap *current, PolynomialMap *next,
     }
 }
 
-#ifndef A179957_03_NO_MAIN
+#ifdef M3_THREADS_ENABLED
 static void m3_matrix_build_incoming(M3Matrix *matrix)
 {
     size_t state_count = matrix->registry.count;
@@ -296,7 +358,7 @@ static void m3_matrix_build(int k, M3Matrix *matrix)
         matrix->orientation[state] = final_orientation_weight(
             matrix->registry.item[state].key, matrix->frontier_width);
     }
-#ifndef A179957_03_NO_MAIN
+#ifdef M3_THREADS_ENABLED
     m3_matrix_build_incoming(matrix);
 #endif
 }
@@ -305,13 +367,13 @@ static void m3_matrix_destroy(M3Matrix *matrix)
 {
     for (size_t index = 0U; index < matrix->registry.count; ++index) {
         free(matrix->row[index].edge);
-#ifndef A179957_03_NO_MAIN
+#ifdef M3_THREADS_ENABLED
         free(matrix->incoming[index].edge);
 #endif
     }
     free(matrix->row);
     free(matrix->orientation);
-#ifndef A179957_03_NO_MAIN
+#ifdef M3_THREADS_ENABLED
     free(matrix->incoming);
 #endif
     polynomial_map_destroy(&matrix->registry);
@@ -419,7 +481,7 @@ static void m3_finalize_vector(const M3Matrix *matrix,
     m3_evaluate_q((const mpz_t *)q, n, factorial, answer);
 }
 
-#ifdef A179957_03_NO_MAIN
+#ifndef M3_THREADS_ENABLED
 static void m3_apply_matrix(const M3Matrix *matrix,
                             const mpz_t *current, mpz_t *next,
                             int n, size_t coefficient_count,
@@ -609,6 +671,8 @@ static void m3_apply_matrix(const M3Matrix *matrix,
     increment_u64(&stats->matrix_applications, "matrix application");
 }
 #endif
+
+#undef M3_THREADS_ENABLED
 
 static mpz_t *m3_compute_sequence(int maximum_n, int k, FILE *stream,
                                   M3Stats *stats)

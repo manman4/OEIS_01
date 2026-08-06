@@ -28,6 +28,34 @@
  *
  *   Q_k(z,x) = Sum_n Q_{n,k}(x) z^n = N_k(z,x)/D_k(z,x).
  *
+ * Why this rational function is proved (not guessed): put w=k-1 and expose
+ * vertices in increasing order.  Only the last w vertices can meet a future
+ * forbidden edge.  The frontier state records their degrees and connected-
+ * component partition.  Its polynomial coefficient is
+ *
+ *   V_n(sigma;x) = Sum_F 2^closed(F) x^|F|,
+ *
+ * over partial linear forests with state sigma.  Adding a vertex enumerates
+ * its only possible edge sets (zero, one, or two edges); degree 3 and cycles
+ * are exactly the invalid choices.  Forgetting the last active vertex of a
+ * nontrivial path supplies its orientation factor 2.  This proves the state
+ * invariant by induction and, after finalization,
+ *
+ *   Q_{n,k}(x) = Sum_sigma V_n(sigma;x) 2^active(sigma).
+ *
+ * There are finitely many states for fixed k, and the saturated transition
+ * is a fixed matrix M_k(x).  Thus, with saturated start row v_w and final
+ * orientation column f,
+ *
+ *   Q_{n,k}(x) = v_w(x) M_k(x)^(n-w) f  (n>=w),
+ *
+ *   Q_k(z,x) = Sum_{n=0}^{w-1} Q_{n,k}(x)z^n
+ *              + z^w v_w(x)(I-zM_k(x))^(-1)f.
+ *
+ * The adjugate/determinant formula for (I-zM)^(-1) proves rationality.
+ * 179957_03.c contains the full transition-invariant proof and constructs
+ * this exact sparse matrix; no b-file values enter this derivation.
+ *
  * Therefore the ordinary generating function A_k(z)=Sum_n a_k(n)z^n is
  * the formal Laplace integral
  *
