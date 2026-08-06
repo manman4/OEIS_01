@@ -2,74 +2,32 @@
 #
 # a_k(n) = number of permutations p of [n] with |p(i+1)-p(i)| >= k for 1 <= i < n.
 #
-# Inclusion-exclusion:
 #   a_k(n) = Sum_F (-1)^e(F) * 2^c(F) * (n-e(F))!
-# where F ranges over the linear forests of the graph G_{n,k} on [n]
-# with edges {u,v} satisfying 0 < |u-v| < k, and e(F), c(F) are the numbers
-# of edges and nontrivial components of F.
 #
-# Since G_{n,k} has bandwidth at most k-1, the weighted linear forests are
-# counted by a transfer matrix on a frontier of the last k-1 vertices.
+# F ranges over the linear forests of the graph G_{n,k} on [n] with edges {u,v}
+# satisfying 0 < |u-v| < k; e(F) and c(F) are the numbers of edges and nontrivial
+# components of F.  G_{n,k} has bandwidth at most k-1, so a transfer matrix whose
+# size depends only on k counts the weighted forests.
 #
-# Weight trick: for a linear forest, c(F) = v(F) - e(F) where v(F) is the number
-# of vertices of degree >= 1.  So the DP carries a polynomial in x marking edges
-# and multiplies by 2 for each covered vertex; the coefficient of x^j comes out
-# as 2^j * F_j, so the division back is exact and everything stays in integers.
+# Weight trick: for a linear forest c(F) = v(F) - e(F), where v(F) counts vertices
+# of degree >= 1.  The DP carries a polynomial in x marking edges and multiplies by
+# 2 per covered vertex; the coefficient of x^j comes out as 2^j * F_j, so dividing
+# back is exact and everything stays in integers.
+#
+# The transfer matrix depends only on k, so it is built once (Machine) and cached.
 
 module PermGap
   module_function
 
-  # ---- frontier DP -------------------------------------------------------
+  # ---- states ------------------------------------------------------------
   #
   # A state is an array of slots, one per frontier vertex, in vertex order.
-  # Each slot is [deg, label]:
-  #   deg   = 0, 1 or 2  (degree so far inside the forest)
-  #   label = component id for deg-1 vertices (open path ends), nil otherwise.
-  # A label occurring twice means both ends of that path are still in the
-  # frontier; occurring once means the other end is already closed off.
-  # deg-2 vertices need no label: they can never take another edge.
+  # Slot = [deg, label]: deg in {0,1,2}; label identifies the path component for
+  # deg-1 vertices (open path ends), nil otherwise.  A label occurring twice means
+  # both ends of that path are still in the frontier, once means the other end is
+  # already closed.  deg-2 vertices need no label: they can take no further edge.
 
-  # Returns [a_k(1), a_k(2), ..., a_k(nmax)].
-  def series(k, nmax)
-    raise ArgumentError, 'k >= 1' if k < 1
-    w = k - 1                       # frontier width
-    states = { [] => [1] }          # state -> polynomial, coeff[j] = weight of j-edge forests
-    out = []
-
-    (1..nmax).each do |_m|
-      # add the new vertex, choosing 0, 1 or 2 edges back into the frontier
-      nxt = {}
-      states.each do |st, poly|
-        extensions(st).each { |nst, added| accumulate(nxt, nst, shift(poly, added)) }
-      end
-
-      # the oldest frontier vertex is now out of reach: retire it
-      if !nxt.empty? && nxt.keys.first.size > w
-        shrunk = {}
-        nxt.each do |st, poly|
-          p = st[0][0] >= 1 ? poly.map { |c| c * 2 } : poly
-          accumulate(shrunk, canon(st[1..]), p)
-        end
-        nxt = shrunk
-      end
-      states = nxt
-
-      # read off F_{m,k,*}: vertices still in the frontier have not been paid for yet
-      total = []
-      states.each do |st, poly|
-        f = 1 << st.count { |d, _| d >= 1 }
-        poly.each_with_index { |c, j| total[j] = (total[j] || 0) + c * f }
-      end
-      out << assemble(out.size + 1, total)
-    end
-    out
-  end
-
-  def value(k, n)
-    series(k, n).last
-  end
-
-  # all ways to append one new vertex, returning [new_state, edges_added]
+  # all ways to append one new vertex, as [new_state, edges_added]
   def extensions(st)
     res = [[st + [[0, nil]], 0]]
     n = st.size
@@ -100,7 +58,7 @@ module PermGap
           l = nextlab; nextlab += 1
           deg[i] = 1; lab[i] = l
           deg[me] = 1; lab[me] = l
-        else                                      # new vertex passes the open end on
+        else                                      # new vertex hands the open end on
           deg[i] = 1; lab[i] = lab[me]
           deg[me] = 2; lab[me] = nil
         end
@@ -127,33 +85,151 @@ module PermGap
     slots.map { |d, l| [d, l.nil? ? nil : (map[l] ||= map.size)] }
   end
 
-  def shift(poly, k)
-    k.zero? ? poly : Array.new(k, 0) + poly
-  end
+  # ---- transfer matrix, built once per k ---------------------------------
+  class Machine
+    attr_reader :trans, :readoff, :size
 
-  def accumulate(h, key, poly)
-    cur = h[key] ||= []
-    poly.each_with_index { |c, j| cur[j] = (cur[j] || 0) + c }
-  end
-
-  # Sum_j (-1)^j F_j (n-j)!,  with F_j = total[j] / 2^j
-  def assemble(n, total)
-    fact = [1]
-    (1..n).each { |i| fact[i] = fact[i - 1] * i }
-    s = 0
-    total.each_with_index do |c, j|
-      next if c.nil? || c.zero?
-      s += (j.even? ? 1 : -1) * (c / (1 << j)) * fact[n - j]
+    def initialize(k)
+      w = k - 1
+      index = { [] => 0 }
+      states = [[]]
+      @trans = []
+      cur = 0
+      while cur < states.size
+        st = states[cur]
+        list = []
+        PermGap.extensions(st).each do |ns, edges|
+          factor = 1
+          if ns.size > w                       # retire the oldest frontier vertex
+            factor = ns[0][0] >= 1 ? 2 : 1     # pay for it if it is covered
+            ns = PermGap.canon(ns[1..])
+          end
+          j = index[ns]
+          unless j
+            j = states.size
+            index[ns] = j
+            states << ns
+          end
+          list << [j, edges, factor]
+        end
+        @trans[cur] = list
+        cur += 1
+      end
+      # vertices still in the frontier have not been paid for yet
+      @readoff = states.map { |st| 1 << st.count { |d, _| d >= 1 } }
+      @size = states.size
     end
-    s
+  end
+
+  MACHINES = {}
+  def machine(k)
+    MACHINES[k] ||= Machine.new(k)
+  end
+
+  # ---- the sequence ------------------------------------------------------
+
+  # Returns [a_k(0), a_k(1), ..., a_k(nmax)], so that series(k, N)[n] == a_k(n).
+  # If a block is given it is called as each term is finished, which is the only
+  # way to see progress: the later terms take far longer than the early ones.
+  #
+  #   PermGap.series(4, 60) { |n, v| puts "a(#{n}) = #{v}" }
+  #
+  # a_k(0) = 1: the empty permutation vacuously satisfies the gap condition, and
+  # the formula gives it too (only the empty forest, contributing 0! = 1).
+  def series(k, nmax)
+    raise ArgumentError, 'k >= 1' if k < 1
+    raise ArgumentError, 'nmax >= 0' if nmax < 0
+    mac = machine(k)
+    size    = mac.size
+    trans   = mac.trans
+    readoff = mac.readoff
+
+    fact = [1]
+    (1..nmax).each { |i| fact[i] = fact[i - 1] * i }
+
+    polys = Array.new(size)
+    polys[0] = [1]                    # empty frontier, no vertices placed yet
+    out = []
+
+    (0..nmax).each do |n|
+      width = n + 1                   # a linear forest on n vertices has < n edges
+
+      if n > 0
+        nxt = Array.new(size)
+        i = -1
+        while (i += 1) < size
+          p = polys[i]
+          next unless p
+          # every transition out of state i reuses the same polynomial, and the
+          # weight is only ever 1 or 2, so double it at most once per state and
+          # let the edge count act as a plain offset into the target
+          dbl = nil
+          trans[i].each do |j, edges, factor|
+            src = factor == 1 ? p : (dbl ||= p.map { |c| c + c })
+            t = (nxt[j] ||= Array.new(width, 0))
+            d = -1
+            len = src.size
+            while (d += 1) < len
+              c = src[d]
+              t[d + edges] += c unless c == 0
+            end
+          end
+        end
+        polys = nxt
+      end
+
+      # read off F_{n,k,*}: frontier vertices have not been paid for yet
+      total = Array.new(width, 0)
+      i = -1
+      while (i += 1) < size
+        p = polys[i]
+        next unless p
+        f = readoff[i]
+        d = -1
+        len = p.size
+        while (d += 1) < len
+          c = p[d]
+          total[d] += c * f unless c == 0
+        end
+      end
+
+      s = 0
+      total.each_with_index do |c, j|
+        next if c == 0
+        s += (j.even? ? 1 : -1) * (c >> j) * fact[n - j]   # c is exactly 2^j * F_j
+      end
+      out << s
+      yield n, s if block_given?
+    end
+    out
+  end
+
+  def value(k, n)
+    series(k, n).last
   end
 
   # ---- brute force, for checking ----------------------------------------
+
+  # backtracking: prunes as soon as a gap is too small
   def brute(k, n)
     return 1 if n <= 1
-    (1..n).to_a.permutation.count do |p|
-      (0...n - 1).all? { |i| (p[i + 1] - p[i]).abs >= k }
+    used = Array.new(n + 1, false)
+    count = 0
+    walk = lambda do |prev, depth|
+      if depth == n
+        count += 1
+        return
+      end
+      (1..n).each do |v|
+        next if used[v]
+        next if prev && (v - prev).abs < k
+        used[v] = true
+        walk.call(v, depth + 1)
+        used[v] = false
+      end
     end
+    walk.call(nil, 0)
+    count
   end
 end
 
@@ -162,6 +238,7 @@ if $PROGRAM_NAME == __FILE__
     warn "usage: ruby #{__FILE__} K NMAX"
     exit 1
   end
+  $stdout.sync = true
   k, nmax = ARGV[0].to_i, (ARGV[1] || 20).to_i
   PermGap.series(k, nmax).each{|v|
     print "#{v}, "
