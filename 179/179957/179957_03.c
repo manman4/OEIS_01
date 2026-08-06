@@ -64,6 +64,38 @@
  * rational function N_k(z,x)/D_k(z,x).  Equations (T1)--(T4) are the
  * transfer-matrix proof used as the starting point of 179957_06.c.
  *
+ * Why this is polynomial time for fixed k
+ * ---------------------------------------
+ * This method does not make an arbitrary condition on a permutation
+ * polynomial-time computable.  It applies here because the forbidden-value
+ * graph
+ *
+ *   G_{n,k} = ({1,...,n}, {{u,v}: 0<|u-v|<k})
+ *
+ * has bandwidth k-1.  Inclusion-exclusion over its forbidden adjacencies
+ * only needs linear forests: a selected adjacency set occurring in a linear
+ * permutation has maximum degree at most 2 and no cycle.  Contracting its
+ * paths gives the exact formula
+ *
+ *   a_k(n) = Sum_F (-1)^|F| 2^c(F) (n-|F|)!,
+ *
+ * with F ranging over the linear forests of G_{n,k}.  When vertices are
+ * exposed in the order 1,2,...,n, a vertex can meet a future forbidden edge
+ * only among the next k-1 vertices.  The degrees and component partition of
+ * this fixed-size frontier therefore contain all information needed by the
+ * sum.  For fixed k the state count S(k) and matrix edge count E(k) are
+ * constants independent of n; for example
+ *
+ *   S(2)=2, S(3)=9, S(4)=49, S(5)=320,
+ *   S(6)=2357, S(7)=19248.
+ *
+ * Since each state carries a polynomial of degree O(n), computing through n
+ * takes O(E(k)*n^2) exact coefficient operations and O(S(k)*n) GMP objects.
+ * Thus the algorithm is f(k)*poly(n), i.e. polynomial in n for every fixed
+ * k.  It is not uniformly efficient when k grows: S(k) increases rapidly.
+ * More general permutation restrictions need their own bounded-width local
+ * state invariant; global restrictions need not admit such an algorithm.
+ *
  * The mathematical invariant and exact GMP evaluation are shared with 04.
  * The source includes 04 with its main renamed so that the carefully checked
  * state canonicalization and transition rules have a single definition; the
