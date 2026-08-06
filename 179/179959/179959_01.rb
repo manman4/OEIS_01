@@ -135,45 +135,67 @@ module PermGap
     raise ArgumentError, 'k >= 1' if k < 1
     raise ArgumentError, 'nmax >= 0' if nmax < 0
     mac = machine(k)
-    polys = Array.new(mac.size)
-    polys[0] = [1]                      # empty frontier, no vertices placed yet
+    size    = mac.size
+    trans   = mac.trans
+    readoff = mac.readoff
+
     fact = [1]
     (1..nmax).each { |i| fact[i] = fact[i - 1] * i }
-    out = [assemble(mac, polys, 0, fact)]
 
-    (1..nmax).each do |n|
-      nxt = Array.new(mac.size)
-      polys.each_with_index do |p, i|
-        next unless p
-        mac.trans[i].each do |j, edges, factor|
-          t = (nxt[j] ||= [])
-          p.each_with_index do |c, d|
-            next if c.nil? || c.zero?
-            idx = d + edges
-            t[idx] = (t[idx] || 0) + c * factor
+    polys = Array.new(size)
+    polys[0] = [1]                    # empty frontier, no vertices placed yet
+    out = []
+
+    (0..nmax).each do |n|
+      width = n + 1                   # a linear forest on n vertices has < n edges
+
+      if n > 0
+        nxt = Array.new(size)
+        i = -1
+        while (i += 1) < size
+          p = polys[i]
+          next unless p
+          # every transition out of state i reuses the same polynomial, and the
+          # weight is only ever 1 or 2, so double it at most once per state and
+          # let the edge count act as a plain offset into the target
+          dbl = nil
+          trans[i].each do |j, edges, factor|
+            src = factor == 1 ? p : (dbl ||= p.map { |c| c + c })
+            t = (nxt[j] ||= Array.new(width, 0))
+            d = -1
+            len = src.size
+            while (d += 1) < len
+              c = src[d]
+              t[d + edges] += c unless c == 0
+            end
           end
         end
+        polys = nxt
       end
-      polys = nxt
-      out << assemble(mac, polys, n, fact)
+
+      # read off F_{n,k,*}: frontier vertices have not been paid for yet
+      total = Array.new(width, 0)
+      i = -1
+      while (i += 1) < size
+        p = polys[i]
+        next unless p
+        f = readoff[i]
+        d = -1
+        len = p.size
+        while (d += 1) < len
+          c = p[d]
+          total[d] += c * f unless c == 0
+        end
+      end
+
+      s = 0
+      total.each_with_index do |c, j|
+        next if c == 0
+        s += (j.even? ? 1 : -1) * (c >> j) * fact[n - j]   # c is exactly 2^j * F_j
+      end
+      out << s
     end
     out
-  end
-
-  # Sum_j (-1)^j F_j (n-j)!, reading F_j off the current DP layer
-  def assemble(mac, polys, n, fact)
-    total = []
-    polys.each_with_index do |p, i|
-      next unless p
-      f = mac.readoff[i]
-      p.each_with_index { |c, j| total[j] = (total[j] || 0) + c * f unless c.nil? }
-    end
-    s = 0
-    total.each_with_index do |c, j|
-      next if c.nil? || c.zero?
-      s += (j.even? ? 1 : -1) * (c >> j) * fact[n - j]   # c is exactly 2^j * F_j
-    end
-    s
   end
 
   def value(k, n)
@@ -211,7 +233,5 @@ if $PROGRAM_NAME == __FILE__
     exit 1
   end
   k, nmax = ARGV[0].to_i, (ARGV[1] || 20).to_i
-  PermGap.series(k, nmax).each{|v|
-    print "#{v}, "
-  }
+  PermGap.series(k, nmax).each_with_index{|v, n| puts "#{n} #{v}"}
 end
