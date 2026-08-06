@@ -90,6 +90,7 @@ typedef struct {
 #ifndef A179957_03_NO_MAIN
     M3IncomingRow *incoming;
 #endif
+    unsigned long *orientation;
     size_t row_capacity;
     size_t edge_count;
     int frontier_width;
@@ -108,6 +109,7 @@ typedef struct {
 #ifndef A179957_03_NO_MAIN
 /* Zero means automatic selection from the online processor count. */
 static int m3_requested_threads = 0;
+static size_t m3_select_worker_threads(size_t state_count);
 #endif
 
 static size_t m3_registry_find(const PolynomialMap *registry, StateKey key)
@@ -288,6 +290,12 @@ static void m3_matrix_build(int k, M3Matrix *matrix)
             matrix->row[source].edge[t].weight = transition[t].weight;
         }
     }
+    matrix->orientation = xcalloc(matrix->registry.count,
+                                  sizeof(*matrix->orientation));
+    for (size_t state = 0U; state < matrix->registry.count; ++state) {
+        matrix->orientation[state] = final_orientation_weight(
+            matrix->registry.item[state].key, matrix->frontier_width);
+    }
 #ifndef A179957_03_NO_MAIN
     m3_matrix_build_incoming(matrix);
 #endif
@@ -302,6 +310,7 @@ static void m3_matrix_destroy(M3Matrix *matrix)
 #endif
     }
     free(matrix->row);
+    free(matrix->orientation);
 #ifndef A179957_03_NO_MAIN
     free(matrix->incoming);
 #endif
@@ -396,8 +405,7 @@ static void m3_finalize_vector(const M3Matrix *matrix,
         mpz_set_ui(q[edges], 0UL);
     }
     for (size_t state = 0U; state < matrix->registry.count; ++state) {
-        unsigned long orientation = final_orientation_weight(
-            matrix->registry.item[state].key, matrix->frontier_width);
+        unsigned long orientation = matrix->orientation[state];
         size_t base = checked_product_size(state, coefficient_count);
         for (int edges = 0; edges <= maximum_edges; ++edges) {
             if (mpz_sgn(vector[base + (size_t)edges]) != 0) {
@@ -537,15 +545,32 @@ static void m3_apply_matrix(const M3Matrix *matrix,
     memset(task, 0, sizeof(task));
 
     size_t state_count = matrix->registry.count;
+    size_t total_work = checked_add_size(matrix->edge_count, state_count);
+    size_t boundary = 0U;
+    size_t completed_work = 0U;
     for (size_t t = 0U; t < thread_count; ++t) {
         task[t].matrix = matrix;
         task[t].current = current;
         task[t].next = next;
         task[t].n = n;
         task[t].coefficient_count = coefficient_count;
-        task[t].first_destination = state_count * t / thread_count;
-        task[t].past_last_destination =
-            state_count * (t + 1U) / thread_count;
+        task[t].first_destination = boundary;
+        if (t + 1U == thread_count) {
+            boundary = state_count;
+        } else {
+            size_t target = total_work * (t + 1U) / thread_count;
+            while (boundary < state_count) {
+                size_t row_work = checked_add_size(
+                    matrix->incoming[boundary].count, 1U);
+                if (completed_work + row_work > target &&
+                    boundary > task[t].first_destination) {
+                    break;
+                }
+                completed_work = checked_add_size(completed_work, row_work);
+                ++boundary;
+            }
+        }
+        task[t].past_last_destination = boundary;
     }
 
     size_t created = 0U;
