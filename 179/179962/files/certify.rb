@@ -44,8 +44,17 @@ def accepts?(dp, k, s)
 end
 
 def alive_set(dp, k, states)
+  # キャッシュはコード(diagdp.rb)と閉包のフィンガープリントで検証する。
+  # 不一致(旧版のキャッシュ・コード変更・閉包変化)なら再計算。旧形式も自動的に不合格。
+  require 'digest'
+  fp = Digest::SHA256.hexdigest(
+    File.binread(File.join(__dir__, 'diagdp.rb')) + Marshal.dump(states.sort_by(&:inspect)))
   file = "alive_#{k}.marshal"
-  return Marshal.load(File.read(file)) if File.exist?(file)
+  if File.exist?(file)
+    data = Marshal.load(File.read(file)) rescue nil
+    return data[1] if data.is_a?(Array) && data[0] == fp
+    puts "k=#{k}: キャッシュ #{file} はフィンガープリント不一致のため破棄して再計算"
+  end
   succ = {}
   states.each { |s| succ[s] = dp.step({s=>1}, k, BIG, k).keys }
   alive = {}
@@ -60,7 +69,7 @@ def alive_set(dp, k, states)
     end
     break unless grew
   end
-  File.write(file, Marshal.dump(alive))
+  File.write(file, Marshal.dump([fp, alive]))
   alive
 end
 
