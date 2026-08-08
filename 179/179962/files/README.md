@@ -20,10 +20,18 @@
                           ┌──
   diagdp.rb    ◄──────────┼── aval.rb        (値の出力: n >= k-2)
    系統 II: 挿入DP        ├── crosscheck.rb
-                          ├── certify.rb     (漸化式の証明)
+                          ├── certify.rb     (漸化式の証明: Ruby)
+                          ├── export_machine.rb ──► machine_kK.txt ──► diag.c
+                          │                              (C/GMP: 値の出力と認証)
                           ├── alive.rb       (旧: certify に統合済)
                           └── partial.rb     (旧: 延長検証の記録)
 ```
+
+C 版（diag.c）は状態機械を再実装せず、Ruby が書き出した転移表を読んで
+GMP の疎行列ベクトル積だけを行う。したがって正しさの根拠は Ruby 側の検証
+（全探索との一致、系統 I との照合、補題 C2）をそのまま継承する。
+**値の生成に漸化式は使わない**点も Ruby 版と同じで、C_k が現れるのは
+`--certify` のみ（検証の対象であって値の供給源ではない）。
 
 `perm_gap.rb` と `diagdp.rb` は互いを一切参照しない。他のファイルは
 固有の数え上げロジックを持たず、エンジンを呼ぶだけである。
@@ -92,9 +100,9 @@
 |---|---|---|
 | DP の出力 = A_k(n) の真値 | 補題 C0 + C2（証明済み）| **すべての k** |
 | A_k が定数係数漸化式を満たす（次数 ≤ B(k)）| 定理 C1（証明済み）| **すべての k** |
-| その漸化式が特に C_k である | 補題 10.1 + 窓検証 | k ≤ 7 のみ |
+| その漸化式が特に C_k である | 補題 10.1 + 窓検証 | k ≤ 8 のみ |
 
-未完なのは 3 行目だけである。したがって **aval.rb / diagdp.rb が k ≥ 8 で
+未完なのは 3 行目だけである。したがって **aval.rb / diagdp.rb / diag.c が k ≥ 9 で
 出す値は、認証を走らせたかどうかと無関係に数学的に正しい**。b-file の延長、
 既存項の検証、新しい k の項の計算のいずれにも、k の制限なく使える。
 
@@ -120,6 +128,7 @@
 | **aval.rb** | A_k(n) の値を出す（通常はこれ） | `ruby aval.rb K NMAX` / `ruby aval.rb K N0 NMAX` |
 | **certify.rb** | 漸化式 C_k の完全証明（認証） | `ruby certify.rb K` |
 | **crosscheck.rb** | 2 系統の独立照合 | `ruby crosscheck.rb` |
+| **diag.c** | C/GMP 版。値の出力・認証とも Ruby の 100〜200 倍速 | 下記 |
 | perm_gap.rb | エンジン I。単体では a_k(n) を出力 | `ruby perm_gap.rb K NMAX` |
 | diagdp.rb | エンジン II。単体でも A_k(n) を出力（n ≥ k のみ） | `ruby diagdp.rb K NMAX` |
 | alive.rb, partial.rb | 開発過程の記録。再現には不要 | — |
@@ -135,9 +144,36 @@
 
 ---
 
-## 6. 目的別の使い分け
+## 6. C/GMP 版（diag.c）の使い方
 
-- **値がほしい** → `ruby aval.rb K NMAX`
+```
+ruby export_machine.rb 8              # 一度だけ: machine_k8.txt を生成
+gcc-omp diag.c -o diag -lgmp          # macOS（プロジェクトのエイリアス）
+cc -O3 -fopenmp diag.c -o diag -lgmp  # Linux
+./diag machine_k8.txt --upto 1000     # A_8(n) を n=k-3..1000 まで出力
+./diag machine_k8.txt --term 500      # 1 項だけ
+./diag machine_k8.txt --certify       # C_k の認証（補題 10.1）
+```
+
+転移は目標状態別 CSR に格納してあり、OpenMP の `parallel for` が競合なしで
+効く（`-fopenmp` なしでもビルド可）。実測（単スレッド）:
+
+| 処理 | Ruby | C/GMP |
+|---|---|---|
+| k=8, n ≤ 1000 の値 | 約 1 時間 | **9.3 秒** |
+| k=7 の認証（2798 項）| 902 秒 | **7 秒** |
+| k=8 の認証（13640 項）| 12〜18 時間（推定）| **1250 秒** |
+
+k=8 の主定理はこの実装により証明された（proved_results.md §10）。
+
+出力の下限は n = k−3 で、それ未満は aval.rb（系統 I）を使う。
+
+---
+
+## 7. 目的別の使い分け
+
+- **値がほしい** → 少量なら `ruby aval.rb K NMAX`、
+  大量（数百項以上）なら diag.c（§6）
 - **手元の値（b-file 等）を検証したい** → aval.rb の出力と突き合わせる。
   ただし本当に独立な検証をしたいなら crosscheck.rb（n ≲ 7）を使う。
 - **漸化式を証明したい** → `ruby certify.rb K`。ログに
