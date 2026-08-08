@@ -26,7 +26,7 @@ $stdout.sync = true
 # --- 小さい n: 固定ギャップ DP ---
 (n0..[nmax, k - 3].min).each do |n|
   v = PermGap.series(n + 1, 2 * n + k).last
-  puts "A_#{k}(#{n}) = #{v}"
+  puts "#{n} #{v}"
 end
 
 # --- n >= k-2: 挿入 DP の一掃き ---
@@ -48,7 +48,7 @@ if lo <= nmax
         next unless a == 0 && aa + af + sp.size == 1 && sp.all? { |fr| fr == ["F", "F"] }
         tot += c
       end
-      puts "A_#{k}(#{n}) = #{2 * tot}"
+      puts "#{n} #{2 * tot}"
     end
     break if n >= nmax
     u = dp.step(u, k, big, k)                            # バルク1step
