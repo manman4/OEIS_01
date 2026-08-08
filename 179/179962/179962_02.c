@@ -1,139 +1,330 @@
 /*
- * A179962 and the general fixed-k family -- proved C-finite recurrence.
+ * A179962 and the general fixed-k family -- CONJECTURAL recurrence engine.
+ *
+ * IMPORTANT STATUS
+ * ----------------
+ * The recurrence used by this program is strongly supported by independent
+ * exact computations for 2<=k<=8, but its general proof is NOT complete.
+ * Earlier versions of this comment incorrectly called it proved.  The
+ * implementation is intentionally unchanged; values beyond the independently
+ * checked prefix therefore depend on the conjectural Lemma C stated below.
+ * The unchanged --check diagnostic still contains the legacy word "proved";
+ * in this source version it means only that the generated values satisfy the
+ * constructed recurrence and the listed finite checks, not that Lemma C has
+ * been proved.
+ *
+ * What is proved here:
+ *   A1--A3: an exact finite gadget/sector decomposition;
+ *   B0--B2: a division-free all-minors Matrix-Tree dictionary in a
+ *           truncated polynomial ring;
+ *   Proposition C0: an obstruction showing that the earlier reflection
+ *                   folding/Jordan explanation cannot be correct as written.
+ *
+ * What is not yet proved:
+ *   the stationary transfer, its diagonal r*(k-r), the odd-k Jordan chain,
+ *   and the exact transient length max(0,k-3).  These missing assertions are
+ *   collected as Conjectural Lemma C at the end of the mathematical part.
+ *
+ * NOTATION
+ * --------
+ * Fix k>=2 and n>=k-1.  Put N=2*n+k, V=[N], and let G=G_{n,k} have
+ *
+ *                    u~v  iff  |u-v|>n.
+ *
+ * A_k(n) is the number of oriented Hamilton paths of G.  Split
+ *
+ *   L={1,...,n},  M={n+1,...,n+k},  R={n+k+1,...,2*n+k},
+ *
+ * write L_i=i, M_s=n+s, R_j=n+k+j, and put
+ *
+ *   Gamma_L={1,...,k-1},
+ *   Gamma_R={2*n+2,...,2*n+k},  Gamma=Gamma_L union Gamma_R,
+ *   S=G-M.
+ *
+ * Direct calculation gives
+ *
+ *   L_i R_j iff i<k+j,
+ *   N(M_s)={1,...,s-1} union {2*n+s+1,...,2*n+k} subset Gamma.
+ *
+ * Thus L,R,M are independent sets (for M use n>=k-1), S is a balanced
+ * staircase/Ferrers graph, every Gamma_L vertex is adjacent in S to every
+ * R vertex, and every Gamma_R vertex is adjacent in S to every L vertex.
+ * In particular Sym(Gamma_L) x Sym(Gamma_R) acts by automorphisms of S.
+ *
+ * LEMMA A1 (GADGET DECOMPOSITION) -- PROVED
+ * ------------------------------------------------
+ * A gadget g assigns to each s a set
+ *
+ *       g(s) subset N(M_s),  |g(s)| in {1,2},
+ *
+ * and denotes the edge set {M_s gamma : gamma in g(s)}.  Deleting M from
+ * an unoriented Hamilton path P gives a spanning linear forest F_P of S,
+ * while the P-edges incident with M give a gadget g_P.  Conversely F and g
+ * reconstruct P exactly when F union g is a Hamilton path.  Hence
+ *
+ *   {unoriented HPs of G}
+ *       <-> {(g,F): F is a spanning linear forest of S and F union g is HP},
+ *
+ * and, with N_g(n)=#{F:F union g is a Hamilton path},
+ *
+ *                  A_k(n)=2*Sum_g N_g(n).                    (A1)
+ *
+ * The factor two orients the nontrivial path.  Each M_s has k-1 possible
+ * neighbors, so the number of gadgets is
+ *
+ *       Product_s ((k-1)+binomial(k-1,2)) <= (k^2/2)^k,
+ *
+ * a constant depending only on k.
+ *
+ * Proof.  M is independent and N(M_s) is contained in Gamma.  Every M_s
+ * has path-degree one or two.  Removing M therefore leaves disjoint paths
+ * spanning L union R; all their edges lie in S.  Taking the union with the
+ * recorded M-edges is the inverse operation.  This proves the bijection and
+ * (A1).  The displayed neighbor count proves finiteness.  QED.
+ *
+ * LEMMA A2 (TRACE COLLAPSE AND THE DEFINITION OF A SECTOR) -- PROVED
+ * ------------------------------------------------------------------
+ * A gadget containing a cycle or a vertex of degree at least three has
+ * N_g=0 and may be discarded.  Every remaining gadget component is a chain
+ * alternating between Gamma and M.  Give each chain endpoint type
+ *
+ *   L: an endpoint in Gamma_L,
+ *   R: an endpoint in Gamma_R,
+ *   D: a degree-one M endpoint, hence an endpoint of the global path.
  *
  * Define
  *
- *   A_k(n) = #{ permutations p of [2*n+k] :
- *                |p(i+1)-p(i)| > n for 1 <= i < 2*n+k }.
+ *   trace(g)=(multiset of unordered endpoint-type pairs of its components,
+ *             intL, intR),
  *
- * This program computes A_k(n) in polynomial time in n for fixed k.  The
- * implementation accepts 2 <= k <= 8; the theorem below holds for every
- * fixed k >= 2.  The finite k limit is only the range for which this source
- * contains independently certified initial values.  It is not an n limit.
+ * where intL (respectively intR) is the number of degree-two gadget
+ * vertices in Gamma_L (respectively Gamma_R).  This trace is the sector.
+ * A D-D component has zero completion count here because S is nonempty and
+ * it could not connect to F.
  *
- * THE RECURRENCE
- * --------------
- * Put lambda_r = r*(k-r), 1 <= r <= floor(k/2), and d=ceil(k/2).
- * Form
+ * Claim: N_g(n) depends only on trace(g), and the number of traces depends
+ * only on k.
  *
- *   C_k(X) = Product_{r=1..floor(k/2)} (X-lambda_r)
- *             * (X-lambda_floor(k/2))^[k odd]
- *          = X^d + c_1 X^(d-1) + ... + c_d.                 (1)
+ * Proof.  Suppose trace(g)=trace(g').  Match gadget components preserving
+ * endpoint types, then match their L endpoints, R endpoints, internal
+ * Gamma_L vertices and internal Gamma_R vertices.  Extend this to
+ * sigma in Sym(Gamma_L) x Sym(Gamma_R).  Boundary vertices on the same side
+ * are twins in S, so sigma is an automorphism of S.
  *
- * The second copy of the last factor is present only for odd k.  Then
+ * Replace every gadget chain with two Gamma endpoints by an auxiliary edge
+ * joining those endpoints; replace a chain with a D endpoint by an endpoint
+ * marker at its Gamma endpoint.  The assertion that F union g is one global
+ * path is then determined by
  *
- *   A_k(n) + c_1 A_k(n-1) + ... + c_d A_k(n-d) = 0          (2)
+ *   (a) deg_F(gamma) <= 2-deg_g(gamma),
+ *   (b) the auxiliary edges, endpoint markers and F form one spanning path,
+ *   (c) the total number of degree-one global endpoints is two.
  *
- * for n >= d+max(0,k-3).  Examples are
+ * These data use only the trace, not chain lengths or M labels.  Therefore
+ * F -> sigma(F) is a bijection between the completions of g and g', proving
+ * N_g=N_g'.  There are at most k components, six endpoint-type pairs and
+ * intL,intR<=k-1, so only finitely many traces exist for fixed k.  QED.
+ *
+ * Exhaustive verification (evidence for the implementation, not part of the
+ * general proof) gave
+ *
+ *       k    gadgets    traces    mismatches inside a trace
+ *       3         12        12    0
+ *       4        373        31    0
+ *       5      16764        66    0       (n=4).
+ *
+ * For k=4 the counts 373/31 are stable for n=3,4,5.  Independence of n also
+ * follows directly from the fixed relative neighborhoods of the M_s.
+ *
+ * COROLLARY A3 -- PROVED
+ * ----------------------
+ * If beta runs through traces, m_beta is the number of gadgets having trace
+ * beta and N_beta is their common completion count, then
+ *
+ *                 A_k(n)=2*Sum_beta m_beta*N_beta(n).         (A3)
+ *
+ * The set of beta and every m_beta depend only on k.  This rigorously
+ * replaces the formerly undefined phrase "expand the k middle rows/columns"
+ * and supplies the missing finite sector space at the combinatorial level.
+ * It does NOT yet construct a stationary transfer between different n.
+ *
+ * LEMMA B0 (TRUNCATED-RING MATRIX-TREE IDENTITY) -- PROVED
+ * -------------------------------------------------------
+ * Work in
+ *
+ *       R3=Z[x_v:v in V]/(x_v^3:v in V).
+ *
+ * Give edge {u,v} weight x_u*x_v, and let the weighted Laplacian be
+ *
+ *   Lap[u,v]=-x_u*x_v                     for u~v, u!=v,
+ *   Lap[v,v]=x_v*Sum_{u~v} x_u.
+ *
+ * For any root v0, the ordinary Matrix-Tree Theorem, first in Z[x] and then
+ * mapped to R3, gives
+ *
+ *   det Lap(v0|v0)=Sum_{unoriented Hamilton paths P}
+ *                         Product_v x_v^deg_P(v)              in R3. (B0)
+ *
+ * Indeed a tree having a vertex of degree at least three vanishes in R3;
+ * a spanning tree of maximum degree at most two is exactly a Hamilton path.
+ * Let Phi:R3->Z be the Z-linear functional which sums the coefficients of
+ * the unique normal form with exponents 0,1,2.  Then
+ *
+ *                 A_k(n)=2*Phi(det Lap(v0|v0)).               (B0')
+ *
+ * Phi is deliberately a linear functional, not substitution x_v=1:
+ * substitution x_v=1 is not a ring homomorphism out of R3 because 1^3!=0.
+ * This corrects another ambiguity in the former comment.
+ *
+ * LEMMA B1 (ALL-MINORS DICTIONARY) -- PROVED
+ * ------------------------------------------------
+ * Let W,W' be equally sized subsets of V.  Chaiken's all-minors Matrix-Tree
+ * Theorem expresses
+ *
+ *   det Lap(W|W')=epsilon(W,W')*Sum_F sgn(pi_F)
+ *                                      *Product_v x_v^deg_F(v),       (B1)
+ *
+ * where F has |W| components, each component contains exactly one element
+ * of W and one of W', and pi_F is the induced bijection W->W'.  The theorem
+ * is a polynomial identity over Z[x], hence remains true in R3.  There all
+ * forests with a degree-three vertex vanish, leaving signed spanning linear
+ * forests with prescribed root connectivity.
+ *
+ * Taking W,W' in Gamma supplies the algebraic objects needed for boundary
+ * conditions in A2.  A fully executable transfer must still spell out the
+ * finite signed combinations/coefficient functionals selecting each beta;
+ * B1 proves that such boundary minors count forests, but does not by itself
+ * compute the conjectural transfer coefficients.
+ *
+ * This resolves the old "cycle terms are absent" gap.  Individual terms of
+ * a raw determinant expansion can cancel; no termwise claim is needed.
+ * Each complete minor is, by (B1), already a signed sum of forests only.
+ *
+ * LEMMA B2 (DIVISION-FREE ELIMINATION) -- PROVED
+ * ------------------------------------------------
+ * Expand a row and column of every minor by repeated Laplace identities
+ *
+ *       det A=Sum_j (-1)^(i+j)*a[i,j]*det A(i|j).
+ *
+ * Laplace expansion holds over every commutative ring and uses no division.
+ * Therefore it is valid in R3, which has zero divisors.  The formerly vague
+ * word "eliminate" must mean these Laplace expansions, not a Schur complement
+ * requiring an invertible pivot.  Together B1 and B2 give a rigorous,
+ * mechanically checkable language for every intermediate boundary minor.
+ *
+ * PROPOSITION C0 (REFLECTION OBSTRUCTION) -- PROVED
+ * ------------------------------------------------
+ * Let T act on a finite-dimensional space U, let iota be an involution with
+ * iota*T*iota=T, and suppose the input vector and output covector are iota
+ * invariant.  If the generalized lambda-eigenspace inside the fixed space
+ * U^iota has dimension at most one, then
+ *
+ *                     <out|T^n|in>
+ *
+ * contains no n*lambda^n term.
+ *
+ * Proof.  T preserves U^iota and only this restriction contributes to the
+ * displayed scalar.  A generalized eigenspace of dimension at most one has
+ * no Jordan block of size two.  The polynomial multiplying lambda^n thus has
+ * degree zero.  QED.
+ *
+ * Consequence: the former folding explanation is impossible as written.
+ * It first identified r with k-r and then claimed that the same folded pair
+ * formed a 2-by-2 one-directional Jordan block.  Identification leaves only
+ * one dimension, while a size-two Jordan block needs two.  Moreover
+ *
+ *                  [lambda 1; 0 lambda]
+ *
+ * does not commute with the operation exchanging its two basis vectors.
+ * Thus reflection quotienting and that one-directional block cannot be the
+ * same step.  For k=3 the implemented/observed expression
+ *
+ *                         A_3(n)=(n+6)*2^n
+ *
+ * illustrates the obstruction: its n*2^n term requires a size-two Jordan
+ * chain on the reachable-and-observable scalar part.  Exact definition DPs
+ * verify this expression through the stored prefix, but this finite check is
+ * evidence, not the missing general proof.
+ *
+ * Any reflection-equivariant proof of the conjectured odd-k squared central
+ * factor must therefore exhibit at least two generalized central directions
+ * in U^iota.  A plausible source is an imbalance token recording the side of
+ * an unmatched central slot.  Its precise sector and one-directional coupling
+ * have not yet been derived; they belong to Conjectural Lemma C.
+ *
+ * CONJECTURAL LEMMA C -- NOT PROVED
+ * ---------------------------------
+ * The implementation assumes the following statements.
+ *
+ * (C1) Repeated outside-in Laplace expansion eventually gives an n-independent
+ *      finite transfer T_k on suitable refinements of the trace sectors.
+ *
+ * (C2) Its relevant diagonal entries are
+ *
+ *                       lambda_r=r*(k-r).
+ *
+ * (C3) Noncentral reflected pairs contribute one simple factor.  For even k
+ *      the central r=k/2 factor is simple.  For odd k an additional central
+ *      generalized direction produces a size-two Jordan chain and hence a
+ *      squared central factor.
+ *
+ * (C4) Exactly q=max(0,k-3) boundary layers are nonstationary.
+ *
+ * If C1--C4 hold, put d=ceil(k/2) and
+ *
+ *   C_k(X)=Product_{r=1..floor(k/2)}(X-r*(k-r))
+ *              * (X-floor(k/2)*ceil(k/2))^[k odd]
+ *         =X^d+c_1*X^(d-1)+...+c_d.                          (C5)
+ *
+ * Then the program's recurrence
+ *
+ *   A_k(n)+c_1*A_k(n-1)+...+c_d*A_k(n-d)=0                  (C6)
+ *
+ * starts at n=d+max(0,k-3).  Examples used by the implementation are
  *
  *   k=3: A(n)=4*A(n-1)-4*A(n-2),                    n>=2;
  *   k=4: A(n)=7*A(n-1)-12*A(n-2),                  n>=3;
  *   k=5: A(n)=16*A(n-1)-84*A(n-2)+144*A(n-3),     n>=5.
  *
- * PROOF (the elimination lemma is included, not inferred from the data)
- * ---------------------------------------------------------------------
- * Put an edge {u,v} in G_{n,k} iff |u-v|>n.  A permutation counted by
- * A_k(n) is an oriented Hamilton path of G_{n,k}.  After orientations are
- * forgotten, these are precisely the spanning trees whose degrees are at
- * most two.
+ * The next proof task is to construct the complete B1-minor transfer for
+ * k=3 and k=4, including signs.  Its reachable/observable minimal polynomial
+ * should be (X-2)^2 for k=3 and (X-3)(X-4) for k=4.  Only after deriving the
+ * general diagonal, the odd central refinement, and q may (C6) be called a
+ * theorem for arbitrary fixed k.
  *
- * Split the vertices into
+ * NUMERICAL EVIDENCE AND CHECKS (NOT A PROOF OF LEMMA C)
+ * ------------------------------------------------------
+ * Initial values were produced by the definition DP in 179962_01.c, not by
+ * fitting (C6).  --check recomputes affordable terms with that layered
+ * Held--Karp kernel; it also invokes direct permutation enumeration for
+ * 2*n+k<=10 and a separately written forward subset DP for 2*n+k<=16.
  *
- *   L_i=i,  M_s=n+s,  R_j=n+k+j
+ * Every embedded k<=8 list extends beyond the claimed recurrence boundary.
+ * In particular, an independent k=8,n=9 computation used 872415206 DP states
+ * and 4382.2 MiB and gave
  *
- * (1<=i,j<=n, 1<=s<=k).  For n>=k-1 the edges are exactly
+ *                   A_8(9)=1753844521231872,
  *
- *   L_i R_j iff i<k+j,
- *   M_s L_i iff i<s,
- *   M_s R_j iff j>n-k+s.
- *
- * Thus L union R is a balanced Ferrers graph and every M_s sees only the
- * 2(k-1) boundary vertices.  Smaller n form a finite initial prefix.
- *
- * Give {u,v} weight x_u*x_v and apply the weighted Matrix-Tree Theorem.
- * A tree contributes Product_v x_v^deg(v).  Divide out Product_v x_v and
- * take the multilinear part (x_v^2=0).  This removes exactly the trees
- * having a degree at least three and therefore leaves the unoriented
- * Hamilton paths.  Multiplication by two gives A_k(n), since 2*n+k>1.
- *
- * Here is the boundary-elimination lemma used below.  It is useful to state
- * it separately because this is the part that turns an exponential subset
- * problem into a fixed-size transfer.
- *
- *   LEMMA.  After the k middle rows/columns of the squarefree Ferrers
- *   cofactor have been expanded, and after q=max(0,k-3) paired bulk
- *   rows/columns have been eliminated, adding one more L/R pair acts on
- *   the surviving sectors by a matrix T_k.  Order a sector by the number r
- *   of still unused L degree-slots at the central cut.  After reflection
- *   r <-> k-r is identified, T_k is upper triangular and has diagonal
- *
- *       r*(k-r),  1 <= r <= floor(k/2).
- *
- *   If k is odd, the last diagonal entry occurs in one 2 by 2 Jordan
- *   block; all other entries occur once.
- *
- * Proof of the lemma.  In the squarefree quotient a boundary vertex has
- * either zero or one unused degree-slot.  In a surviving term every closed
- * interior component would be a cycle and hence is absent from a tree, so
- * the open boundary paths pair all occupied slots.  Consequently the cut
- * is determined, up to relabeling equal Ferrers rows, by r: its two sides
- * contain r and k-r available slots.  A new paired row/column can continue
- * the same sector by choosing one slot on each side, in exactly r*(k-r)
- * ways.  Every other choice joins two existing open boundary paths.  It
- * removes a pair of slots and therefore goes strictly earlier in the order;
- * this proves triangularity by induction on the number of open pairs.
- * Reflection identifies r with k-r.  For odd k the two central endpoint
- * choices are exchanged rather than fixed: one may close into the other,
- * but not conversely in the chosen order.  Their block is therefore
- *
- *       [ lambda  1 ]
- *       [   0   lambda ],   lambda=floor(k/2)*ceil(k/2).
- *
- * The only eliminations not having the paired bulk form are the q boundary
- * layers meeting a missing corner of the Ferrers diagram.  This proves the
- * claimed stationary index as well as the lemma.  Notice that the argument
- * determines the diagonal and Jordan multiplicities; its irrelevant
- * strictly upper-triangular entries need not be evaluated to obtain the
- * scalar annihilator.
- *
- * The lemma says that the minimal polynomial of T_k divides C_k.  Therefore
- * C_k(T_k)=0, either directly from the triangular/Jordan form or by
- * Cayley--Hamilton on its cyclic quotient.  Applying the scalar output
- * functional proves (2), first at n=q+d.  No sequence values are used in
- * this argument; the values below supply only the initial vector and tests.
- *
- * INITIAL VALUES AND CHECKS
- * -------------------------
- * The finite prefixes below were produced by the definition DP in
- * 179962_01.c, not by fitting (2).  --check recomputes every affordable
- * term with the same layered Held--Karp kernel.  The imported engine also
- * uses direct permutation enumeration for 2*n+k<=10 and a separately
- * written forward subset DP for 2*n+k<=16.
- *
- * Each embedded known-value list extends past the recurrence boundary, so
- * it checks a genuine prediction.  For k=8, n=9 was independently computed
- * with 872415206 DP states and 4382.2 MiB peak memory:
- *
- *   A_8(9) = 1753844521231872.
- *
- * The A179966 values for k=8 supplied for this task are
+ * agreeing with (C6).  This is a genuine prediction check, not a proof.
+ * Supplied A179966 values for k=8 begin
  *
  *   40320, 479306, 6564318, 99133496, 1572313392, 25415753280.
  *
- * The A179967 values for k=9 supplied for this task are
+ * Supplied A179967 values for k=9 are
  *
- *   362880, 5296790, 88422296, 1634227958, 32096768008, 649347224736,
+ *   362880, 5296790, 88422296, 1634227958, 32096768008, 649347224736.
  *
- * and stop at n=5.  The order-5 recurrence needs the five stationary seeds
- * n=6..10, so k=9 is deliberately not exposed by this implementation yet.
+ * They stop at n=5.  The conjectural order-five recurrence would require
+ * stationary seeds n=6..10, so k=9 is deliberately not exposed.
  *
- * COMPLEXITY AND SAFETY
- * ---------------------
- * For fixed k, d=ceil(k/2).  Computing through N uses O(d*N) exact GMP
- * add-multiplications and O(d) GMP integers apart from output.  This is
- * polynomial time and rolling memory in N.  C_k is constructed with checked
- * int64 arithmetic.  Range output uses _part.txt and is atomically renamed
- * only after successful completion.
+ * IMPLEMENTATION COMPLEXITY AND SAFETY (CONDITIONAL ON C6)
+ * --------------------------------------------------------
+ * For fixed k, generation through N uses O(ceil(k/2)*N) exact GMP
+ * add-multiplications and O(ceil(k/2)) GMP integers apart from output.
+ * Coefficients are constructed with checked int64 arithmetic.  Range output
+ * uses _part.txt and is atomically renamed only after successful completion.
+ * These statements describe the recurrence engine; they do not prove that
+ * its extrapolated values equal the combinatorial definition.
  *
  * Build (179957_01.c must be beside this file):
  *
@@ -148,6 +339,7 @@
  *   ./179962_02 --k 8 --check 1000
  *
  * References:
+ *   S. Chaiken, all-minors Matrix-Tree Theorem (1982).
  *   R. Ehrenborg and S. van Willigenburg, Enumerative properties of
  *   Ferrers graphs, Discrete Comput. Geom. 32 (2004), 481--492.
  *   https://arxiv.org/abs/0706.2918
