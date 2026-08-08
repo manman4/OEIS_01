@@ -48,6 +48,7 @@ def alive_set(dp, k, states)
   # 不一致(旧版のキャッシュ・コード変更・閉包変化)なら再計算。旧形式も自動的に不合格。
   require 'digest'
   fp = Digest::SHA256.hexdigest(
+    File.binread(File.expand_path(__FILE__)) +
     File.binread(File.join(__dir__, 'diagdp.rb')) + Marshal.dump(states.sort_by(&:inspect)))
   file = "alive_#{k}.marshal"
   if File.exist?(file)
