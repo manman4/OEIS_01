@@ -155,5 +155,5 @@ if $0 == __FILE__
   k = ARGV[0].to_i
   nmax = ARGV[1].to_i
   dp = DiagDP.new(k)
-  (k..nmax).each { |n| puts "A_#{k}(#{n}) = #{2 * dp.run(n)}" }
+  (k..nmax).each { |n| puts "#{n} #{2 * dp.run(n)}" }
 end
