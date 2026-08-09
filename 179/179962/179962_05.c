@@ -76,7 +76,7 @@
 #define P5_MAX_RAW (1 + P5_MAX_SLOTS + P5_MAX_SLOTS*(P5_MAX_SLOTS-1)/2)
 #define P5_MAX_STATES ((size_t)2000000)
 #define P5_MAX_TRANSITIONS ((size_t)100000000)
-#define P5_MAX_MPZ_OBJECTS ((size_t)25000000)
+#define P5_MAX_MPZ_OBJECTS ((size_t)40000000)
 
 typedef struct {
     uint64_t low;
@@ -119,6 +119,14 @@ typedef struct {
     uint64_t peak_rss_bytes;
     double seconds;
 } P5Stats;
+
+/* Active coefficients occupy the half-open interval [low,high).  high=0
+ * denotes an inactive state.  offset addresses one compact layer arena. */
+typedef struct {
+    unsigned low;
+    unsigned high;
+    size_t offset;
+} P5Span;
 
 typedef enum { P5_UPTO, P5_TERM, P5_CHECK } P5Mode;
 
@@ -429,45 +437,97 @@ static void p5_value(int n,int family_k,mpz_t answer,P5Stats *stats)
     int total=2*n+family_k;
     P5Machine machine; p5_machine_build(n,&machine);
     size_t degree_count=(size_t)total+1U;
-    size_t vector_slots=p5_mul_size(machine.count,degree_count);
-    size_t objects=p5_add_size(p5_mul_size(vector_slots,2U),
-                               p5_mul_size(degree_count,3U));
-    if (objects>P5_MAX_MPZ_OBJECTS) {
-        p5_machine_destroy(&machine);
-        p5_die("GMP coefficient-object limit reached");
-    }
-    mpz_t *current=p5_mpz_array(vector_slots);
-    mpz_t *next=p5_mpz_array(vector_slots);
+    P5Span *current_span=p5_calloc(machine.count,sizeof(*current_span));
+    P5Span *next_span=p5_calloc(machine.count,sizeof(*next_span));
+    current_span[0].low=0U; current_span[0].high=1U; current_span[0].offset=0U;
+    size_t current_count=1U;
+    mpz_t *current=p5_mpz_array(current_count);
+    mpz_set_ui(current[0],1UL);
     mpz_t *q=p5_mpz_array(degree_count);
     mpz_t *factorial=p5_mpz_array(degree_count);
     mpz_t *work=p5_mpz_array(degree_count);
-    mpz_set_ui(current[0],1UL);
+    size_t fixed_objects=p5_mul_size(degree_count,3U);
+    stats->coefficient_objects=p5_add_size(current_count,fixed_objects);
     for (int placed=0;placed<total;++placed) {
-        for (size_t i=0;i<vector_slots;++i) mpz_set_ui(next[i],0UL);
+        memset(next_span,0,p5_mul_size(machine.count,sizeof(*next_span)));
+        /* First pass: find the exact coefficient interval needed by each
+         * destination.  This avoids S*(total+1) initialized mpz_t objects. */
         for (size_t source=0;source<machine.count;++source) {
-            size_t source_base=p5_mul_size(source,degree_count);
+            P5Span source_span=current_span[source];
+            if (source_span.high==0U) continue;
             P5Row *row=&machine.row[source];
             for (size_t r=0;r<row->count;++r) {
                 P5Transition tr=row->item[r];
-                size_t destination_base=p5_mul_size(tr.destination,degree_count);
-                for (int e=0;e<=placed;++e) {
-                    if (mpz_sgn(current[source_base+(size_t)e])==0) continue;
-                    int ne=e+(int)tr.edges;
-                    if (ne>total) p5_die("polynomial degree overflow");
-                    mpz_addmul_ui(next[destination_base+(size_t)ne],
-                                  current[source_base+(size_t)e],tr.factor);
+                unsigned low=source_span.low+(unsigned)tr.edges;
+                unsigned high=source_span.high+(unsigned)tr.edges;
+                if (high>degree_count) p5_die("polynomial degree overflow");
+                P5Span *destination=&next_span[tr.destination];
+                if (destination->high==0U) {
+                    destination->low=low; destination->high=high;
+                } else {
+                    if (low<destination->low) destination->low=low;
+                    if (high>destination->high) destination->high=high;
+                }
+            }
+        }
+        size_t next_count=0U;
+        for (size_t state=0;state<machine.count;++state) {
+            P5Span *span=&next_span[state];
+            if (span->high==0U) continue;
+            if (span->low>=span->high) p5_die("invalid coefficient interval");
+            span->offset=next_count;
+            next_count=p5_add_size(next_count,(size_t)(span->high-span->low));
+        }
+        size_t simultaneous=p5_add_size(p5_add_size(current_count,next_count),
+                                        fixed_objects);
+        if (simultaneous>P5_MAX_MPZ_OBJECTS) {
+            fprintf(stderr,
+                    "error: n=%d,k=%d, layer %d needs %zu simultaneous GMP "
+                    "objects (at least %.1f MiB of mpz headers; guard=%zu)\n",
+                    n,family_k,placed+1,simultaneous,
+                    (double)p5_mul_size(simultaneous,sizeof(mpz_t))/1048576.0,
+                    P5_MAX_MPZ_OBJECTS);
+            p5_mpz_destroy(current,current_count);
+            p5_mpz_destroy(q,degree_count); p5_mpz_destroy(factorial,degree_count);
+            p5_mpz_destroy(work,degree_count); free(current_span); free(next_span);
+            p5_machine_destroy(&machine);
+            p5_die("GMP coefficient-object limit reached");
+        }
+        if (simultaneous>stats->coefficient_objects)
+            stats->coefficient_objects=simultaneous;
+        mpz_t *next=p5_mpz_array(next_count);
+        /* Second pass: apply the transitions to the compact arenas. */
+        for (size_t source=0;source<machine.count;++source) {
+            P5Span source_span=current_span[source];
+            if (source_span.high==0U) continue;
+            P5Row *row=&machine.row[source];
+            for (size_t r=0;r<row->count;++r) {
+                P5Transition tr=row->item[r];
+                P5Span destination=next_span[tr.destination];
+                for (unsigned e=source_span.low;e<source_span.high;++e) {
+                    size_t source_index=p5_add_size(source_span.offset,
+                                                    (size_t)(e-source_span.low));
+                    if (mpz_sgn(current[source_index])==0) continue;
+                    unsigned ne=e+(unsigned)tr.edges;
+                    size_t destination_index=p5_add_size(destination.offset,
+                                                         (size_t)(ne-destination.low));
+                    mpz_addmul_ui(next[destination_index],current[source_index],tr.factor);
                     if (stats->addmuls==UINT64_MAX) p5_die("operation counter overflow");
                     ++stats->addmuls;
                 }
             }
         }
-        mpz_t *temporary=current; current=next; next=temporary;
+        p5_mpz_destroy(current,current_count);
+        current=next; current_count=next_count;
+        P5Span *temporary=current_span; current_span=next_span; next_span=temporary;
     }
     for (size_t state=0;state<machine.count;++state) {
-        size_t base=p5_mul_size(state,degree_count);
-        for (int e=0;e<=total;++e) {
-            if (mpz_sgn(current[base+(size_t)e])!=0)
-                mpz_addmul_ui(q[e],current[base+(size_t)e],machine.state[state].readoff);
+        P5Span span=current_span[state];
+        if (span.high==0U) continue;
+        for (unsigned e=span.low;e<span.high;++e) {
+            size_t index=p5_add_size(span.offset,(size_t)(e-span.low));
+            if (mpz_sgn(current[index])!=0)
+                mpz_addmul_ui(q[e],current[index],machine.state[state].readoff);
         }
     }
     mpz_set_ui(factorial[0],1UL);
@@ -485,12 +545,12 @@ static void p5_value(int n,int family_k,mpz_t answer,P5Stats *stats)
     if (mpz_sgn(answer)<0 || (total>1 && mpz_odd_p(answer)))
         p5_die("final count invariant failed");
     stats->states=machine.count; stats->transitions=machine.transition_count;
-    stats->coefficient_objects=objects;
     stats->peak_rss_bytes=p5_peak_rss_bytes();
     stats->seconds=p5_now()-started;
-    p5_mpz_destroy(current,vector_slots); p5_mpz_destroy(next,vector_slots);
+    p5_mpz_destroy(current,current_count);
     p5_mpz_destroy(q,degree_count); p5_mpz_destroy(factorial,degree_count);
-    p5_mpz_destroy(work,degree_count); p5_machine_destroy(&machine);
+    p5_mpz_destroy(work,degree_count); free(current_span); free(next_span);
+    p5_machine_destroy(&machine);
 }
 
 static const char *const p5_k2[] = {
