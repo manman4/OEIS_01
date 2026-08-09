@@ -49,6 +49,8 @@
  * This proves by induction on t that every state coefficient equals the
  * number of partial linear forests represented by that state.
  *
+ * A large vertex n+1+s can be a target at a later step t only if
+ * s<=t-n-1<=k-2.  Thus every s>=k-1 large vertex is permanently frozen.
  * The pruning is lossless.  At final step T=n+k-1 a Hamilton path has
  * 2n+k-1 edges, so d(T)=2T-e(T)=k-1.  Since each step adds at most two edges,
  * d is nondecreasing; a completable state therefore has d<=k-1.  A frozen
@@ -93,8 +95,10 @@
  * true,false,false, so one fixed T applies from t=k-1 through n+1, exactly
  * n-k+3 times.  Tail layer j is evaluated symbolically at t=n+1+j; hence it
  * opens C_j, and j=k-2 is exactly the final layer.  Reverse closure from
- * states accepted through this fixed tail is precisely co-reachability, so
- * deleting its complement cannot change (1).
+ * states accepted through this fixed tail is precisely co-reachability.
+ * All transition multiplicities are nonnegative, so there is no cancellation:
+ * every state outside that closure contributes exactly zero, and deleting it
+ * cannot change (1).
  *
  * Run
  *
@@ -121,10 +125,10 @@
  *   ./179962_06 --k 9 --term 30
  *   ./179962_06 --k 9 --certify
  *
- * The machine is generated once.  Range output is written atomically to
+ * The machine is generated once.  It also stores direct insertion-DP values
+ * n=0..k-4, so every range file has OEIS offset 0.  Range output is written atomically to
  * b179962_06_kK.txt and stops before the first value having 1001 digits;
- * --term is unrestricted.  For k=9 the supplied OEIS prefix n=0..5 is
- * embedded; the machine directly supplies every term from n=6 onward.
+ * --term is unrestricted.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -151,7 +155,8 @@ typedef struct {
 } P6Layer;
 
 typedef struct {
-    int k, states, head_count, tail_count, accept_count, max_dimension;
+    int k, prefix_count, states, head_count, tail_count, accept_count, max_dimension;
+    char **prefix;
     int *head_index, *accept;
     unsigned long *head_coefficient;
     P6Layer bulk, *tail;
@@ -257,7 +262,27 @@ static void p6_machine_read(P6Machine *machine, const char *path, int wanted_k)
     p6_expect(stream, "k");
     if (fscanf(stream, "%d", &machine->k) != 1 || machine->k != wanted_k)
         p6_die("machine K does not match --k");
-    p6_expect(stream, "head");
+    char marker[32];
+    if (fscanf(stream, "%31s", marker) != 1) p6_die("truncated machine file");
+    if (!strcmp(marker, "prefix")) {
+        if (fscanf(stream, "%d", &machine->prefix_count) != 1 ||
+            machine->prefix_count < 0 || machine->prefix_count > machine->k - 3)
+            p6_die("bad machine prefix count");
+        machine->prefix = p6_calloc((size_t)machine->prefix_count,
+                                    sizeof(*machine->prefix));
+        for (int i = 0; i < machine->prefix_count; ++i) {
+            int index;
+            char value[4096];
+            if (fscanf(stream, "%d %4095s", &index, value) != 2 || index != i)
+                p6_die("bad machine prefix row");
+            size_t length = strlen(value) + 1U;
+            machine->prefix[i] = p6_malloc(length, 1U);
+            memcpy(machine->prefix[i], value, length);
+        }
+        if (fscanf(stream, "%31s", marker) != 1) p6_die("truncated machine file");
+    }
+    /* Old development machines remain usable for single terms at n>=k-3. */
+    if (strcmp(marker, "head") != 0) p6_die("expected head in machine file");
     if (fscanf(stream, "%d", &machine->head_count) != 1 || machine->head_count < 0)
         p6_die("bad machine head");
     machine->head_index = p6_malloc((size_t)machine->head_count,
@@ -310,6 +335,8 @@ static void p6_machine_clear(P6Machine *machine)
     for (int i = 0; i < machine->tail_count; ++i) p6_layer_clear(&machine->tail[i]);
     free(machine->tail); p6_layer_clear(&machine->bulk);
     free(machine->accept); free(machine->head_coefficient); free(machine->head_index);
+    for (int i = 0; i < machine->prefix_count; ++i) free(machine->prefix[i]);
+    free(machine->prefix);
 }
 
 static mpz_t *p6_vector_new(int size)
@@ -437,10 +464,6 @@ static P6Options p6_options(int argc, char **argv, char *default_path, size_t pa
     return result;
 }
 
-static const char *const p6_k9_prefix[] = {
-    "362880", "5296790", "88422296", "1634227958", "32096768008", "649347224736"
-};
-
 static void p6_output(FILE *stream, long n, const mpz_t value)
 {
     if (fprintf(stream, "%ld ", n) < 0 || !mpz_out_str(stream, 10, value) ||
@@ -477,10 +500,13 @@ static int p6_certify(P6Run *run, bool quiet)
     mpz_t value, residual, product;
     mpz_inits(value, residual, product, NULL);
     long streak = 0, first = -1;
+    const long base_n = run->n;
     double started = p6_now();
     for (long n = run->n; n <= limit; ++n) {
         p6_value(run, value);
-        if (n >= run->machine->k + degree) {
+        /* Earliest index for which this machine contains all preceding terms.
+         * The resulting boundary is certified, but is not asserted sharp. */
+        if (n >= base_n + degree) {
             mpz_set(residual, value);
             for (int lag = 1; lag <= degree; ++lag) {
                 mpz_mul_si(product, window[(n - lag) % degree],
@@ -498,7 +524,8 @@ static int p6_certify(P6Run *run, bool quiet)
                     n, streak, p6_now() - started);
         if (streak >= needed) {
             printf("certified: C_%d recurrence holds for every n >= %ld "
-                   "(%ld zero residuals; live dimension %d)\n",
+                   "(%ld zero residuals; live dimension %d; "
+                   "boundary is not claimed sharp)\n",
                    run->machine->k, first, streak, run->machine->states);
             mpz_clears(product, residual, value, NULL); p6_vector_free(window, degree);
             return EXIT_SUCCESS;
@@ -524,11 +551,13 @@ int main(int argc, char **argv)
         p6_run_clear(&run); p6_machine_clear(&machine); return status;
     }
 
-    if (options.n < run.n && !(options.k == 9 && options.n <= 5))
+    if (options.n < run.n && options.n >= machine.prefix_count)
         p6_die("requested N precedes this machine's exact head boundary");
     FILE *stream = NULL;
     char partial[128], final[128];
     if (options.mode == P6_UPTO) {
+        if (machine.prefix_count != run.n)
+            p6_die("range output needs an offset-zero prefix; regenerate the machine");
         snprintf(partial, sizeof(partial), "b179962_06_k%d_part.txt", options.k);
         snprintf(final, sizeof(final), "b179962_06_k%d.txt", options.k);
         stream = fopen(partial, "w"); if (!stream) p6_die("cannot create partial b-file");
@@ -538,15 +567,20 @@ int main(int argc, char **argv)
     long first_written = -1, last_written = -1;
     double started = p6_now();
 
-    if (options.mode == P6_UPTO && options.k == 9) {
-        long last = options.n < 5 ? options.n : 5;
+    if (options.mode == P6_UPTO) {
+        long last = options.n < machine.prefix_count - 1L
+                        ? options.n : machine.prefix_count - 1L;
         for (long n = 0; n <= last; ++n) {
-            mpz_set_str(value, p6_k9_prefix[n], 10); p6_output(stream, n, value);
+            if (mpz_set_str(value, machine.prefix[n], 10) != 0)
+                p6_die("invalid exact prefix value");
+            p6_output(stream, n, value);
             if (first_written < 0) first_written = n;
             last_written = n;
         }
-    } else if (options.mode == P6_TERM && options.k == 9 && options.n <= 5) {
-        mpz_set_str(value, p6_k9_prefix[options.n], 10); p6_output(stdout, options.n, value);
+    } else if (options.mode == P6_TERM && options.n < machine.prefix_count) {
+        if (mpz_set_str(value, machine.prefix[options.n], 10) != 0)
+            p6_die("invalid exact prefix value");
+        p6_output(stdout, options.n, value);
     }
 
     if (options.n >= run.n) {

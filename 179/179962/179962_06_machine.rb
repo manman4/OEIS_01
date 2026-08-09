@@ -200,6 +200,15 @@ class InsertionMachine
       special.all? { |fragment| fragment == ["F", "F"] }
   end
 
+  # Exact values before the stationary head boundary.  This is the same
+  # proved insertion process with the real n and all layers applied directly;
+  # it is not a recurrence or an imported table.
+  def direct_value(n)
+    vector = { [0, 0, 0, 0, []] => 1 }
+    (1..(n + @k - 1)).each { |t| vector = step(vector, t, n) }
+    2 * vector.sum { |state, count| accepting?(state) ? count : 0 }
+  end
+
   def alive(reachable)
     # Exact co-reachability, not a heuristic pruning rule.  First mark states
     # accepted by the fixed tail, then take the reverse bulk closure.
@@ -235,6 +244,10 @@ class InsertionMachine
 
     File.open(path, "w") do |stream|
       stream.puts "k #{@k}"
+      # The stationary machine begins at n=k-3.  Store the independently
+      # direct-insertion prefix so a range file always has OEIS offset 0.
+      stream.puts "prefix #{@k - 3}"
+      (0...(@k - 3)).each { |n| stream.puts "#{n} #{direct_value(n)}" }
       head = head_vector.select { |state, _| live[state] }
       stream.puts "head #{head.size}"
       head.each { |state, coefficient| stream.puts "#{index[state]} #{coefficient}" }
@@ -437,6 +450,38 @@ def run_self_check
     warn "self-check ok: k=#{k}, n=#{n}, value=#{oriented}, " \
          "#{n + k - 1} layer histograms"
   end
+  # P6 is checked separately: for every reachable state of the small k=4
+  # bulk graph, compare reverse-closure "alive" with a direct forward search
+  # of at most |V| bulk steps followed by the fixed tail.
+  machine = InsertionMachine.new(4)
+  full = machine.reachable
+  reverse_alive = machine.alive(full)
+  full.each do |start|
+    frontier = { start => true }
+    seen = {}
+    forward_alive = false
+    (0..full.size).each do
+      frontier.each_key do |state|
+        tail = { state => 1 }
+        (1..2).each do |j|
+          tail = machine.step(tail, InsertionMachine::BIG + 1 + j,
+                              InsertionMachine::BIG)
+        end
+        if tail.any? { |state, count| machine.accepting?(state) && count.positive? }
+          forward_alive = true
+          break
+        end
+      end
+      break if forward_alive
+      frontier.each_key { |state| seen[state] = true }
+      next_states = machine.step(frontier.to_h { |state, _| [state, 1] },
+                                 4, InsertionMachine::BIG).keys
+      frontier = next_states.reject { |state| seen[state] }.to_h { |state| [state, true] }
+      break if frontier.empty?
+    end
+    abort "self-check co-reachability mismatch" unless forward_alive == !!reverse_alive[start]
+  end
+  warn "self-check ok: k=4 co-reachability for all #{full.size} bulk states"
   warn "self-check ok: proof branches P1--P7 and definition counts"
 end
 
