@@ -108,6 +108,16 @@ static void layer_apply(const Layer *layer, mpz_t *source, mpz_t *dst)
     }
 }
 
+static void layer_clear(Layer *layer)
+{
+    free(layer->start);
+    free(layer->src);
+    free(layer->mul);
+    layer->start = NULL;
+    layer->src = NULL;
+    layer->mul = NULL;
+}
+
 /* ------------------------------------------------------------------ */
 /* the machine as exported by export_machine.rb                         */
 
@@ -205,6 +215,18 @@ static void machine_read(Machine *machine, const char *path)
     fclose(stream);
 }
 
+static void machine_clear(Machine *machine)
+{
+    free(machine->head_idx);
+    free(machine->head_coef);
+    free(machine->accept);
+    layer_clear(&machine->bulk);
+    for (int j = 0; j < machine->tail_count; ++j) {
+        layer_clear(&machine->tail[j]);
+    }
+    free(machine->tail);
+}
+
 /* ------------------------------------------------------------------ */
 /* C_k, used only by --certify                                          */
 
@@ -263,6 +285,22 @@ static mpz_t *vector_new(int size)
         mpz_init(vector[i]);
     }
     return vector;
+}
+
+static void vector_free(mpz_t *vector, int size)
+{
+    for (int i = 0; i < size; ++i) {
+        mpz_clear(vector[i]);
+    }
+    free(vector);
+}
+
+static void run_clear(Run *run)
+{
+    vector_free(run->state, run->machine->nstates);
+    vector_free(run->scratch, run->machine->nstates);
+    vector_free(run->tail_a, run->machine->max_dim);
+    vector_free(run->tail_b, run->machine->max_dim);
 }
 
 static void run_init(Run *run, Machine *machine)
@@ -403,12 +441,20 @@ int main(int argc, char **argv)
                 printf("certified: C_%d holds for all n >= %ld "
                        "(%ld consecutive zero residuals, needed %d)\n",
                        machine.k, first_ok, streak, need);
+                mpz_clear(value); mpz_clear(rhs);
+                vector_free(window, degree);
+                run_clear(&run);
+                machine_clear(&machine);
                 return EXIT_SUCCESS;
             }
             if (n < last_n) run_advance(&run);
         }
         printf("not certified: longest zero-residual streak %ld, needed %d\n",
                streak, need);
+        mpz_clear(value); mpz_clear(rhs);
+        vector_free(window, degree);
+        run_clear(&run);
+        machine_clear(&machine);
         return EXIT_FAILURE;
     }
 
@@ -428,5 +474,8 @@ int main(int argc, char **argv)
 #endif
         fprintf(stderr, "diag: done in %.2f s\n", seconds);
     }
+    mpz_clear(value);
+    run_clear(&run);
+    machine_clear(&machine);
     return EXIT_SUCCESS;
 }
