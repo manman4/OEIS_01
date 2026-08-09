@@ -126,8 +126,10 @@
  *   ./179962_06 --k 9 --certify
  *
  * The machine is generated once.  It also stores direct insertion-DP values
- * n=0..k-4, so every range file has OEIS offset 0.  Range output is written atomically to
- * b179962_06_kK.txt and stops before the first value having 1001 digits;
+ * n=0..k-4, so every range file has OEIS offset 0.  Range output is written
+ * atomically to b179962_06_kK.txt.  A 1000-digit a(n) is allowed, but the
+ * first term with 1001 or more digits and every later term are not written.
+ * Only the decimal digits of a(n), not the index/space/newline, are counted.
  * --term is unrestricted.
  */
 
@@ -565,6 +567,8 @@ int main(int argc, char **argv)
     mpz_t value, cutoff; mpz_inits(value, cutoff, NULL);
     mpz_ui_pow_ui(cutoff, 10UL, P6_MAX_DIGITS);
     long first_written = -1, last_written = -1;
+    long first_excluded = -1;
+    bool bfile_limit_reached = false;
     double started = p6_now();
 
     if (options.mode == P6_UPTO) {
@@ -573,6 +577,12 @@ int main(int argc, char **argv)
         for (long n = 0; n <= last; ++n) {
             if (mpz_set_str(value, machine.prefix[n], 10) != 0)
                 p6_die("invalid exact prefix value");
+            /* |a(n)| >= 10^1000 means at least 1001 decimal digits. */
+            if (mpz_cmpabs(value, cutoff) >= 0) {
+                first_excluded = n;
+                bfile_limit_reached = true;
+                break;
+            }
             p6_output(stream, n, value);
             if (first_written < 0) first_written = n;
             last_written = n;
@@ -583,12 +593,16 @@ int main(int argc, char **argv)
         p6_output(stdout, options.n, value);
     }
 
-    if (options.n >= run.n) {
+    if (options.n >= run.n && !bfile_limit_reached) {
         for (long n = run.n; n <= options.n; ++n) {
             p6_value(&run, value);
             if (options.mode == P6_TERM && n == options.n) p6_output(stdout, n, value);
             if (options.mode == P6_UPTO) {
-                if (mpz_cmpabs(value, cutoff) >= 0) break;
+                if (mpz_cmpabs(value, cutoff) >= 0) {
+                    first_excluded = n;
+                    bfile_limit_reached = true;
+                    break;
+                }
                 p6_output(stream, n, value);
                 if (first_written < 0) first_written = n;
                 last_written = n;
@@ -601,6 +615,10 @@ int main(int argc, char **argv)
         if (fclose(stream) != 0) p6_die("could not close partial b-file");
         if (rename(partial, final) != 0) p6_die("could not finalize b-file");
         printf("wrote %s (n=%ld..%ld)\n", final, first_written, last_written);
+        if (bfile_limit_reached && !options.quiet)
+            fprintf(stderr,
+                    "179962_06: n=%ld has more than %lu digits; not written\n",
+                    first_excluded, P6_MAX_DIGITS);
     }
     if (!options.quiet) fprintf(stderr, "179962_06: %.3f s\n", p6_now() - started);
     mpz_clears(cutoff, value, NULL); p6_run_clear(&run); p6_machine_clear(&machine);
