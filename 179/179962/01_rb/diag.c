@@ -23,12 +23,15 @@
  *
  * Usage:
  *   ruby export_machine.rb K            # writes machine_kK.txt (once per k)
- *   ./diag machine_k8.txt --upto 1000   # print A_8(n), n = k-2 .. 1000
+ *   ./diag machine_k8.txt --upto 1000   # print A_8(n), n = k-3 .. 1000
  *   ./diag machine_k8.txt --term 500    # print a single term
  *   ./diag machine_k8.txt --certify     # prove the C_k recurrence (Lemma 10.1)
  *
  * Options:
- *   --upto N     print all terms up to n = N (default 100)
+ *   --upto N     print all terms up to n = N (default 100).  The first term
+ *                printed is n = k-3, the smallest n the head layers reach;
+ *                for smaller n use aval.rb, which counts them by the
+ *                independent inclusion-exclusion DP.
  *   --term N     print only n = N
  *   --certify    run the finite-window certificate for C_k
  *   --quiet      suppress progress on stderr
