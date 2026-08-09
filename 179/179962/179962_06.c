@@ -78,9 +78,42 @@
  * Krylov implementation.  The readable generator and the C consumer are
  * separated so that the transition table is reproducible and inspectable.
  *
+ * IMPLEMENTATION AUDIT
+ * ====================
+ * The generator marks the proof-to-code correspondence P1--P7 at the actual
+ * branches: P1 wake/capsule-open; P2 insertion arity; P3 two-slot
+ * multiplicities and cycle exclusion; P4 one-slot insertion and d+=1; P5
+ * zero-slot capsule and d+=2; P6 reachable/co-reachable pruning; P7 accepting
+ * state.  The remaining decomposition is exact because the step procedure
+ * depends only on the three predicates
+ *
+ *       t<=n+1,  t<=k-2,  t==n+k-1.
+ *
+ * Head applies t=1..k-2.  In the bulk these predicates are respectively
+ * true,false,false, so one fixed T applies from t=k-1 through n+1, exactly
+ * n-k+3 times.  Tail layer j is evaluated symbolically at t=n+1+j; hence it
+ * opens C_j, and j=k-2 is exactly the final layer.  Reverse closure from
+ * states accepted through this fixed tail is precisely co-reachability, so
+ * deleting its complement cannot change (1).
+ *
+ * Run
+ *
+ *       ruby 179962_06_machine.rb --self-check
+ *
+ * for an implementation check independent of the aggregated transition
+ * formulas.  It keeps labelled vertices and literal edge sets, enumerates
+ * every legal 0/1/2-edge insertion, reconstructs the mathematical state from
+ * each forest, and compares the COMPLETE state histogram after every layer.
+ * It then compares the accepted count with direct permutation enumeration.
+ * The checked cases (k,n)=(3,2),(3,3),(4,2),(4,3) exercise capsule creation,
+ * bulk, capsule opening, representative multiplicity cases, cycle rejection and final
+ * (F,F) acceptance.  This is a regression check; the proof above establishes
+ * correctness for all fixed k.
+ *
  * BUILD AND USE
  * =============
  *   ruby 179962_06_machine.rb 9
+ *   ruby 179962_06_machine.rb --self-check
  *   clang -O3 -std=c11 -Wall -Wextra -Wpedantic \
  *     -I/opt/homebrew/include -L/opt/homebrew/lib \
  *     179962_06.c -lgmp -o 179962_06
