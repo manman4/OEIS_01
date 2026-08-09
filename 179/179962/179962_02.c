@@ -371,6 +371,9 @@
  * add-multiplications and O(ceil(k/2)) GMP integers apart from output.
  * Coefficients are constructed with checked int64 arithmetic.  Range output
  * uses _part.txt and is atomically renamed only after successful completion.
+ * A b-file includes terms having at most 1000 decimal digits and stops before
+ * the first 1001-digit term; the index, separating space, and newline are not
+ * part of this digit count.  --term output is not subject to this limit.
  * For k=2,...,8 the certificate proves that these generated values equal the
  * combinatorial definition, for every n at or beyond the stated boundary.
  *
@@ -408,6 +411,7 @@
 #define M2_DEFAULT_N 100
 #define M2_DEFAULT_CHECK_N 1000
 #define M2_MAX_N 1000000
+#define M2_BFILE_MAX_DIGITS 1000UL
 #define M2_REFERENCE_MAX_TOTAL 22
 #define M2_ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
 
@@ -665,7 +669,8 @@ static void m2_write_term(FILE *stream, int n, const mpz_t value)
 
 /* Sequential generation with a degree-size rolling GMP ring. */
 static void m2_generate(int k, int maximum_n, FILE *stream, mpz_t last,
-                        bool verify_known, M2Stats *stats)
+                        bool verify_known, int *written_maximum_n,
+                        M2Stats *stats)
 {
     M2Recurrence recurrence = m2_build_recurrence(k);
     size_t seed_count;
@@ -683,8 +688,17 @@ static void m2_generate(int k, int maximum_n, FILE *stream, mpz_t last,
     }
     mpz_t next;
     mpz_t product;
+    mpz_t first_excluded_value;
     mpz_init(next);
     mpz_init(product);
+    mpz_init(first_excluded_value);
+    if (stream != NULL) {
+        mpz_ui_pow_ui(first_excluded_value, 10UL,
+                      M2_BFILE_MAX_DIGITS);
+    }
+    if (written_maximum_n != NULL) {
+        *written_maximum_n = -1;
+    }
     stats->addmuls = 0;
     clock_t begin = clock();
 
@@ -718,13 +732,24 @@ static void m2_generate(int k, int maximum_n, FILE *stream, mpz_t last,
             m2_verify_known(current, n, k);
         }
         if (stream != NULL) {
+            /* |a(n)| >= 10^1000 means that a(n) has at least 1001 digits. */
+            if (mpz_cmpabs(current, first_excluded_value) >= 0) {
+                break;
+            }
             m2_write_term(stream, n, current);
+            if (fflush(stream) != 0) {
+                m2_die("could not flush the partial b-file");
+            }
+            if (written_maximum_n != NULL) {
+                *written_maximum_n = n;
+            }
         }
         if (n == maximum_n) {
             mpz_set(last, current);
         }
     }
     stats->seconds = (double)(clock() - begin) / (double)CLOCKS_PER_SEC;
+    mpz_clear(first_excluded_value);
     mpz_clear(product);
     mpz_clear(next);
     for (int i = 0; i < recurrence.degree; ++i) {
@@ -769,9 +794,12 @@ static void m2_usage(const char *program)
             "Counts permutations of [2*n+k] whose adjacent absolute "
             "differences are > n.\n"
             "K is in %d..%d and N is in 0..%d; N is not limited by 2*n+k.\n"
+            "A range b-file stops before its first term over %lu digits; "
+            "--term is unrestricted.\n"
             "Defaults: --k %d --upto %d; --check defaults to %d.\n",
             program, program, program, program, M2_MIN_K, M2_MAX_K,
-            M2_MAX_N, M2_DEFAULT_K, M2_DEFAULT_N, M2_DEFAULT_CHECK_N);
+            M2_MAX_N, M2_BFILE_MAX_DIGITS,
+            M2_DEFAULT_K, M2_DEFAULT_N, M2_DEFAULT_CHECK_N);
 }
 
 static M2Options m2_parse_options(int argc, char **argv)
@@ -911,7 +939,9 @@ static void m2_write_file(const char *argv0, int maximum_n, int k)
     mpz_t last;
     mpz_init(last);
     M2Stats stats;
-    m2_generate(k, maximum_n, stream, last, true, &stats);
+    int written_maximum_n;
+    m2_generate(k, maximum_n, stream, last, true,
+                &written_maximum_n, &stats);
     if (fflush(stream) != 0 || fclose(stream) != 0) {
         mpz_clear(last);
         free(final_path);
@@ -930,8 +960,15 @@ static void m2_write_file(const char *argv0, int maximum_n, int k)
     fprintf(stderr,
             "179962_02: n=0..%d, exact GMP recurrence, "
             "add-multiplies=%" PRIu64 ", %.3f s\n",
-            maximum_n, stats.addmuls, stats.seconds);
-    printf("wrote %s (n=0..%d, k=%d)\n", final_path, maximum_n, k);
+            written_maximum_n, stats.addmuls, stats.seconds);
+    printf("wrote %s (n=0..%d, k=%d",
+           final_path, written_maximum_n, k);
+    if (written_maximum_n < maximum_n) {
+        printf("; requested through n=%d, later terms omitted because the "
+               "next term exceeds %lu decimal digits",
+               maximum_n, M2_BFILE_MAX_DIGITS);
+    }
+    printf(")\n");
     mpz_clear(last);
     free(final_path);
     free(part_path);
@@ -944,7 +981,7 @@ static void m2_check(int maximum_n, int k, uint64_t memory_mib)
     mpz_init(recurrence_value);
     mpz_init(reference_value);
     M2Stats stats;
-    m2_generate(k, maximum_n, NULL, recurrence_value, true, &stats);
+    m2_generate(k, maximum_n, NULL, recurrence_value, true, NULL, &stats);
 
     int reference_maximum = (M2_REFERENCE_MAX_TOTAL - k) / 2;
     if (reference_maximum < 0) {
@@ -955,7 +992,7 @@ static void m2_check(int maximum_n, int k, uint64_t memory_mib)
     }
     for (int n = 0; n <= reference_maximum; ++n) {
         M2Stats one_stats;
-        m2_generate(k, n, NULL, recurrence_value, true, &one_stats);
+        m2_generate(k, n, NULL, recurrence_value, true, NULL, &one_stats);
         Count128 exact = m2_definition_value(n, k, memory_mib);
         m2_count128_to_mpz(reference_value, exact);
         if (mpz_cmp(recurrence_value, reference_value) != 0) {
@@ -1003,7 +1040,8 @@ int main(int argc, char **argv)
         mpz_t value;
         mpz_init(value);
         M2Stats stats;
-        m2_generate(options.k, options.maximum_n, NULL, value, true, &stats);
+        m2_generate(options.k, options.maximum_n, NULL, value, true,
+                    NULL, &stats);
         m2_print_recurrence(options.k);
         fprintf(stderr,
                 "179962_02: n=%d, k=%d, exact GMP recurrence, "
