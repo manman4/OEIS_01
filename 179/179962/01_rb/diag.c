@@ -353,11 +353,8 @@ int main(int argc, char **argv)
     run_init(&run, &machine);
 
     clock_t begin = clock();
-    double wall_begin;
 #ifdef _OPENMP
-    wall_begin = omp_get_wtime();
-#else
-    wall_begin = 0.0;
+    double wall_begin = omp_get_wtime();
 #endif
 
     if (mode_certify) {
