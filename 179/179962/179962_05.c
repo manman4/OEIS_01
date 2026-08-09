@@ -52,6 +52,9 @@
  * after completion.  --term writes only to standard output.
  */
 
+#if defined(__APPLE__)
+#define _DARWIN_C_SOURCE
+#endif
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
 #include <inttypes.h>
@@ -60,6 +63,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <time.h>
 #include <gmp.h>
 
@@ -112,6 +116,7 @@ typedef struct {
     size_t transitions;
     uint64_t addmuls;
     size_t coefficient_objects;
+    uint64_t peak_rss_bytes;
     double seconds;
 } P5Stats;
 
@@ -162,6 +167,20 @@ static double p5_now(void)
     struct timespec t;
     if (clock_gettime(CLOCK_MONOTONIC, &t) != 0) p5_die("clock_gettime failed");
     return (double)t.tv_sec + (double)t.tv_nsec/1000000000.0;
+}
+
+static uint64_t p5_peak_rss_bytes(void)
+{
+    struct rusage usage;
+    if (getrusage(RUSAGE_SELF,&usage)!=0) p5_die("getrusage failed");
+    if (usage.ru_maxrss < 0) p5_die("negative peak RSS");
+#if defined(__APPLE__)
+    return (uint64_t)usage.ru_maxrss;          /* bytes on macOS */
+#else
+    if ((uint64_t)usage.ru_maxrss>UINT64_MAX/UINT64_C(1024))
+        p5_die("peak RSS conversion overflow");
+    return (uint64_t)usage.ru_maxrss*UINT64_C(1024); /* KiB on Linux */
+#endif
 }
 
 static uint8_t p5_byte(P5Key key, int slot)
@@ -466,7 +485,9 @@ static void p5_value(int n,int family_k,mpz_t answer,P5Stats *stats)
     if (mpz_sgn(answer)<0 || (total>1 && mpz_odd_p(answer)))
         p5_die("final count invariant failed");
     stats->states=machine.count; stats->transitions=machine.transition_count;
-    stats->coefficient_objects=objects; stats->seconds=p5_now()-started;
+    stats->coefficient_objects=objects;
+    stats->peak_rss_bytes=p5_peak_rss_bytes();
+    stats->seconds=p5_now()-started;
     p5_mpz_destroy(current,vector_slots); p5_mpz_destroy(next,vector_slots);
     p5_mpz_destroy(q,degree_count); p5_mpz_destroy(factorial,degree_count);
     p5_mpz_destroy(work,degree_count); p5_machine_destroy(&machine);
@@ -580,8 +601,10 @@ static P5Options p5_options(int argc,char **argv)
 static void p5_report(int n,int k,const P5Stats *s)
 {
     fprintf(stderr,"179962_05: n=%d,k=%d, perm_gap frontier DP, states=%zu, "
-            "transitions=%zu, GMP objects=%zu, addmuls=%" PRIu64 ", %.3f s\n",
-            n,k,s->states,s->transitions,s->coefficient_objects,s->addmuls,s->seconds);
+            "transitions=%zu, GMP objects=%zu, peak RSS=%.1f MiB, "
+            "addmuls=%" PRIu64 ", %.3f s\n",
+            n,k,s->states,s->transitions,s->coefficient_objects,
+            (double)s->peak_rss_bytes/1048576.0,s->addmuls,s->seconds);
 }
 
 static char *p5_path(const char *argv0,const char *name)
