@@ -1,5 +1,5 @@
 # A124808: Number of numbers k <= n such that k^2 + 1 is squarefree.
-# n = 1..10000 を計算し、b124808_01.txt に "n a(n)" 形式で保存する。
+# n = 0..10000 を計算し、b124808_01.txt に "n a(n)" 形式で保存する。
 #
 # アルゴリズム:
 #   k^2 + 1 を割る素数は 2 か p ≡ 1 (mod 4) のみ。また 4 は k^2+1 を割らない。
@@ -20,7 +20,7 @@ is_prime[0] = is_prime[1] = false
 end
 
 squarefree = Array.new(N + 1, true)
-squarefree[0] = false
+# k = 0: 0^2+1 = 1 は squarefree として数える (offset 0)
 
 (5..N).each do |p|
   next unless is_prime[p] && p % 4 == 1
@@ -35,10 +35,10 @@ squarefree[0] = false
   end
 end
 
-File.open('b124808_01.txt', 'w'){|f|
+File.open('b124808_01.txt', 'w') do |f|
   count = 0
-  (1..N).each{|n|
+  (0..N).each do |n|
     count += 1 if squarefree[n]
     f.puts "#{n} #{count}"
-  }
-}
+  end
+end
