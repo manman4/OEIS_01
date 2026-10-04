@@ -35,10 +35,10 @@ squarefree[0] = false
   end
 end
 
-File.open('b124808_01.txt', 'w') do |f|
+File.open('b124808_01.txt', 'w'){|f|
   count = 0
-  (1..N).each do |n|
+  (1..N).each{|n|
     count += 1 if squarefree[n]
     f.puts "#{n} #{count}"
-  end
-end
+  }
+}
