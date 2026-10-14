@@ -592,7 +592,10 @@ static void usage(FILE *out)
 int main(int argc, char **argv)
 {
     if (argc==2 && !strcmp(argv[1],"--self-test")) { self_test(); return 0; }
-    if (argc==2 && !strcmp(argv[1],"--help")) { usage(stdout); return 0; }
+    if (argc==2 && !strcmp(argv[1],"--help")) {
+        usage(stdout);
+        return (fflush(stdout) || ferror(stdout)) ? EXIT_FAILURE : 0;
+    }
     if (argc==3 && !strcmp(argv[1],"--check")) {
         uint64_t p=parse_u64(argv[2]);
         if (p<2 || p>MAX_END) die("P must be between 2 and 10^12");
